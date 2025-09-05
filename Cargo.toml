@@ -1,0 +1,8 @@
+[package]
+name = "tic-tac-toe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.99"
+regex = "1.11.2"
