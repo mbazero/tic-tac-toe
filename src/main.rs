@@ -1,4 +1,5 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+use rand::{rngs::ThreadRng, seq::IndexedRandom};
 use regex::Regex;
 use std::{
     fmt::Display,
@@ -6,15 +7,26 @@ use std::{
     str::FromStr,
     sync::LazyLock,
 };
+use thiserror::Error;
+
+type BoardIdx = u8;
+
+#[derive(Error, Debug)]
+pub enum MoveError {
+    #[error("cell is out of bounds")]
+    CellOutOfBounds,
+    #[error("cell is occupied")]
+    CellOccupied,
+}
 
 pub struct Game {
     state: GameState,
-    board: [Option<Player>; 9],
+    board: [Option<PlayerId>; 9],
     moves: usize,
 }
 
 impl Game {
-    pub fn make_move(&mut self, coords: Coords) -> Result<()> {
+    pub fn make_move(&mut self, idx: BoardIdx) -> Result<(), MoveError> {
         let GameState::Ongoing {
             next_player: cur_player,
         } = self.state
@@ -22,14 +34,15 @@ impl Game {
             return Ok(());
         };
 
-        let idx = coords.i * 3 + coords.j;
-        let Some(cell) = self.board.get_mut(idx) else {
-            bail!("cell is out of bounds: {coords:?}");
-        };
-        if cell.is_some() {
-            bail!("cell is occupied: {coords:?}");
+        if idx >= 9 {
+            return Err(MoveError::CellOutOfBounds);
         }
-        *cell = Some(cur_player);
+
+        if self.board[idx as usize].is_some() {
+            return Err(MoveError::CellOccupied);
+        }
+
+        self.board[idx as usize] = Some(cur_player);
         self.moves += 1;
 
         let win_lanes = match idx {
@@ -55,23 +68,21 @@ impl Game {
         } else {
             self.state = GameState::Ongoing {
                 next_player: match cur_player {
-                    Player::X => Player::O,
-                    Player::O => Player::X,
+                    PlayerId::X => PlayerId::O,
+                    PlayerId::O => PlayerId::X,
                 },
             }
         }
 
         Ok(())
     }
-
-    pub fn print_board(&self) {}
 }
 
 impl Default for Game {
     fn default() -> Self {
         Self {
             state: GameState::Ongoing {
-                next_player: Player::X,
+                next_player: PlayerId::X,
             },
             board: [None; 9],
             moves: 0,
@@ -82,8 +93,8 @@ impl Default for Game {
 impl Display for Game {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cc = |i: usize| match self.board[i] {
-            Some(Player::X) => 'X',
-            Some(Player::O) => 'O',
+            Some(PlayerId::X) => 'X',
+            Some(PlayerId::O) => 'O',
             None => ' ',
         };
         writeln!(f, "{}|{}|{}", cc(0), cc(1), cc(2))?;
@@ -97,25 +108,25 @@ impl Display for Game {
 
 #[derive(Copy, Clone, Debug)]
 pub enum GameState {
-    Ongoing { next_player: Player },
-    Win { winner: Player },
+    Ongoing { next_player: PlayerId },
+    Win { winner: PlayerId },
     Tie,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Player {
+pub enum PlayerId {
     X,
     O,
 }
 
-impl Display for Player {
+impl Display for PlayerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
             match self {
-                Player::X => 'X',
-                Player::O => 'O',
+                PlayerId::X => 'X',
+                PlayerId::O => 'O',
             }
         )
     }
@@ -123,15 +134,21 @@ impl Display for Player {
 
 #[derive(Copy, Clone, Debug)]
 pub struct Coords {
-    i: usize,
-    j: usize,
+    i: u8,
+    j: u8,
+}
+
+impl Coords {
+    fn to_board_idx(self) -> BoardIdx {
+        self.i * 3 + self.j
+    }
 }
 
 impl FromStr for Coords {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        static RGX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d),(\d)$").unwrap());
+        static RGX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([0-2]),([0-2])$").unwrap());
         let caps = RGX
             .captures(s.trim())
             .context("malformed coordinate string")?;
@@ -160,9 +177,46 @@ impl CliReader {
     }
 }
 
+pub trait MoveStrategy {
+    fn get_move(&mut self, board: &[Option<PlayerId>; 9]) -> BoardIdx;
+}
+
+#[derive(Default)]
+pub struct HumanMoveStrategy {
+    cli_reader: CliReader,
+}
+
+impl MoveStrategy for HumanMoveStrategy {
+    fn get_move(&mut self, _: &[Option<PlayerId>; 9]) -> BoardIdx {
+        loop {
+            if let Ok(coords) = self.cli_reader.read::<Coords>() {
+                return coords.to_board_idx();
+            } else {
+                print!("Invalid input; try again: ");
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct RandomMoveStrategy {
+    rng: ThreadRng,
+}
+
+impl MoveStrategy for RandomMoveStrategy {
+    fn get_move(&mut self, board: &[Option<PlayerId>; 9]) -> BoardIdx {
+        let open_squares: Vec<_> = (0u8..)
+            .zip(board)
+            .filter_map(|(i, x)| x.is_none().then_some(i))
+            .collect();
+        *open_squares.choose(&mut self.rng).unwrap()
+    }
+}
+
 fn main() -> Result<()> {
-    let mut cli_reader = CliReader::default();
     let mut game = Game::default();
+    let mut player_x = RandomMoveStrategy::default();
+    let mut player_o = HumanMoveStrategy::default();
 
     println!("\n{game}\n");
     while let GameState::Ongoing {
@@ -170,17 +224,19 @@ fn main() -> Result<()> {
     } = game.state
     {
         print!("Player {cur_player} enter your move: ");
-        while cli_reader
-            .read::<Coords>()
-            .and_then(|coords| game.make_move(coords))
-            .is_err()
-        {
-            print!("Invalid move, try again: ");
+        let strategy: &mut dyn MoveStrategy = match cur_player {
+            PlayerId::X => &mut player_x,
+            PlayerId::O => &mut player_o,
+        };
+        while let Err(err) = {
+            let idx = strategy.get_move(&game.board);
+            game.make_move(idx)
+        } {
+            println!("Invalid move; {err}; try again: ")
         }
         println!("\n{game}\n");
     }
 
-    game.print_board();
     match game.state {
         GameState::Win { winner } => {
             println!("PLAYER {winner} WON!");
