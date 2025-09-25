@@ -1,6 +1,5 @@
-- [ ] Add clap options to select player config
-- [ ] Extract board and game
-- [ ] Extract move strategies with enum dispatch
+- [ ] Extract board, game, and move strats
+- [ ] Refactor game to contain move strategies and run loop etc
 - [ ] Generate comprehensive testing
 - [ ] Improve existing board performance with arrays
 - [ ] Add bitmap board

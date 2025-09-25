@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use clap::Parser;
 use rand::{rngs::ThreadRng, seq::IndexedRandom};
 use regex::Regex;
 use std::{
@@ -7,6 +8,7 @@ use std::{
     str::FromStr,
     sync::LazyLock,
 };
+use strum::{Display, EnumString};
 use thiserror::Error;
 
 type BoardIdx = u8;
@@ -213,10 +215,41 @@ impl MoveStrategy for RandomMoveStrategy {
     }
 }
 
+#[derive(Copy, Clone, Debug, EnumString, Default, Display)]
+pub enum MoveStrategyId {
+    #[default]
+    #[strum(serialize = "human", serialize = "h")]
+    Human,
+    #[strum(serialize = "random", serialize = "r")]
+    Random,
+}
+
+impl MoveStrategyId {
+    fn new_strat(self) -> Box<dyn MoveStrategy> {
+        match self {
+            MoveStrategyId::Human => Box::new(HumanMoveStrategy::default()),
+            MoveStrategyId::Random => Box::new(RandomMoveStrategy::default()),
+        }
+    }
+}
+
+#[derive(Parser, Debug)]
+pub struct CliArgs {
+    #[arg(short = 'x', default_value_t = MoveStrategyId::Human)]
+    x_strat: MoveStrategyId,
+    #[arg(short = 'o', default_value_t = MoveStrategyId::Human)]
+    o_strat: MoveStrategyId,
+}
+
 fn main() -> Result<()> {
+    let args = CliArgs::parse();
+
+    println!("Player X: {}", args.x_strat);
+    println!("Player O: {}", args.o_strat);
+
     let mut game = Game::default();
-    let mut player_x = RandomMoveStrategy::default();
-    let mut player_o = HumanMoveStrategy::default();
+    let mut player_x = args.x_strat.new_strat();
+    let mut player_o = args.o_strat.new_strat();
 
     println!("\n{game}\n");
     while let GameState::Ongoing {
@@ -225,8 +258,8 @@ fn main() -> Result<()> {
     {
         print!("Player {cur_player} enter your move: ");
         let strategy: &mut dyn MoveStrategy = match cur_player {
-            PlayerId::X => &mut player_x,
-            PlayerId::O => &mut player_o,
+            PlayerId::X => player_x.as_mut(),
+            PlayerId::O => player_o.as_mut(),
         };
         while let Err(err) = {
             let idx = strategy.get_move(&game.board);
