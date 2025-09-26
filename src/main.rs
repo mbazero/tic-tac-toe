@@ -3,7 +3,7 @@ use clap::Parser;
 use strum::{Display, EnumString};
 
 use crate::{
-    board::array::ArrayBoard,
+    board::bitset::BitsetBoard,
     game::Game,
     player::{
         MoveStrategy, MoveStrategyEnum, PlayerId, human::HumanMoveStrategy,
@@ -48,7 +48,7 @@ fn main() -> Result<()> {
     println!("Player O: {}", args.o_strat);
 
     let mut game = Game::new(
-        ArrayBoard::default(),
+        BitsetBoard::default(),
         args.x_strat.into_strategy(PlayerId::X),
         args.o_strat.into_strategy(PlayerId::O),
     );

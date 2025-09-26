@@ -94,7 +94,7 @@ impl<B: Board, X: MoveStrategy, O: MoveStrategy> Display for Game<B, X, O> {
 mod tests {
     use super::*;
     use crate::{
-        board::{Board, BoardIdx, array::ArrayBoard},
+        board::{Board, BoardIdx, array::ArrayBoard, bitset::BitsetBoard},
         player::PlayerId,
     };
     use rstest::rstest;
@@ -117,6 +117,13 @@ mod tests {
 
     impl BoardFactory for ArrayBoardFactory {
         type Board = ArrayBoard;
+    }
+
+    #[derive(Clone, Copy, Default)]
+    struct BitsetBoardFactory;
+
+    impl BoardFactory for BitsetBoardFactory {
+        type Board = BitsetBoard;
     }
 
     #[derive(Clone)]
@@ -166,7 +173,9 @@ mod tests {
     }
 
     #[rstest]
-    fn turn_progression(#[values(ArrayBoardFactory)] factory: impl BoardFactory) {
+    fn turn_progression(
+        #[values(ArrayBoardFactory, BitsetBoardFactory)] factory: impl BoardFactory,
+    ) {
         let (mut game, x_tracker, o_tracker) = make_game(&factory, vec![0, 2], vec![1, 3]);
 
         match game.advance() {
@@ -185,7 +194,7 @@ mod tests {
     }
 
     #[rstest]
-    fn x_can_win(#[values(ArrayBoardFactory)] factory: impl BoardFactory) {
+    fn x_can_win(#[values(ArrayBoardFactory, BitsetBoardFactory)] factory: impl BoardFactory) {
         let (mut game, x_tracker, o_tracker) = make_game(&factory, vec![0, 1, 2], vec![3, 4]);
 
         for _ in 0..4 {
@@ -212,7 +221,7 @@ mod tests {
     }
 
     #[rstest]
-    fn o_can_win(#[values(ArrayBoardFactory)] factory: impl BoardFactory) {
+    fn o_can_win(#[values(ArrayBoardFactory, BitsetBoardFactory)] factory: impl BoardFactory) {
         let (mut game, x_tracker, o_tracker) = make_game(&factory, vec![0, 8, 1], vec![3, 4, 5]);
 
         for _ in 0..5 {
@@ -239,7 +248,7 @@ mod tests {
     }
 
     #[rstest]
-    fn tie_detection(#[values(ArrayBoardFactory)] factory: impl BoardFactory) {
+    fn tie_detection(#[values(ArrayBoardFactory, BitsetBoardFactory)] factory: impl BoardFactory) {
         let (mut game, x_tracker, o_tracker) =
             make_game(&factory, vec![0, 2, 7, 3, 8], vec![4, 6, 1, 5]);
 
@@ -269,7 +278,9 @@ mod tests {
     }
 
     #[rstest]
-    fn display_shows_ongoing_state(#[values(ArrayBoardFactory)] factory: impl BoardFactory) {
+    fn display_shows_ongoing_state(
+        #[values(ArrayBoardFactory, BitsetBoardFactory)] factory: impl BoardFactory,
+    ) {
         let (mut game, _, _) = make_game(&factory, vec![0, 3], vec![4]);
         game.advance();
         game.advance();
@@ -282,7 +293,9 @@ mod tests {
     }
 
     #[rstest]
-    fn display_shows_winner(#[values(ArrayBoardFactory)] factory: impl BoardFactory) {
+    fn display_shows_winner(
+        #[values(ArrayBoardFactory, BitsetBoardFactory)] factory: impl BoardFactory,
+    ) {
         let (mut game, _, _) = make_game(&factory, vec![0, 1, 2], vec![3, 4]);
         for _ in 0..5 {
             game.advance();
@@ -294,7 +307,9 @@ mod tests {
     }
 
     #[rstest]
-    fn display_shows_tie(#[values(ArrayBoardFactory)] factory: impl BoardFactory) {
+    fn display_shows_tie(
+        #[values(ArrayBoardFactory, BitsetBoardFactory)] factory: impl BoardFactory,
+    ) {
         let (mut game, _, _) = make_game(&factory, vec![0, 2, 7, 3, 8], vec![4, 6, 1, 5]);
         for _ in 0..9 {
             game.advance();

@@ -5,6 +5,7 @@ use thiserror::Error;
 use crate::player::PlayerId;
 
 pub mod array;
+pub mod bitset;
 
 pub type BoardIdx = u8;
 

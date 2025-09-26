@@ -1,2 +1,0 @@
-- [ ] Generate comprehensive testing
-- [ ] Add bitmap board

@@ -7,6 +7,7 @@ use super::BoardIdx;
 #[derive(Clone, Debug, Default)]
 pub struct ArrayBoard([Option<PlayerId>; 9]);
 
+#[allow(unused)]
 impl ArrayBoard {
     const WIN_LANES: [[BoardIdx; 3]; 8] = [
         // Rows
