@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 use std::{
     io::{self, Write},
@@ -25,7 +25,7 @@ impl HumanMoveStrategy {
     }
 
     fn get_move_checked(&mut self, board: &impl Board) -> Result<BoardIdx> {
-        let idx = self.cli_reader.read::<Coords>()?.to_board_idx();
+        let idx = self.cli_reader.read::<Coords>()?.to_board_idx()?;
         board.check_set(idx)?;
         Ok(idx)
     }
@@ -55,7 +55,7 @@ impl FromStr for Coords {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        static RGX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([0-2]),([0-2])$").unwrap());
+        static RGX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([\d]),([\d])$").unwrap());
         let caps = RGX
             .captures(s.trim())
             .context("malformed coordinate string")?;
@@ -67,8 +67,11 @@ impl FromStr for Coords {
 }
 
 impl Coords {
-    fn to_board_idx(self) -> BoardIdx {
-        self.i * 3 + self.j
+    fn to_board_idx(self) -> Result<BoardIdx> {
+        if self.i >= 3 || self.j >= 3 {
+            bail!("coords are out of bounds");
+        }
+        Ok(self.i * 3 + self.j)
     }
 }
 
