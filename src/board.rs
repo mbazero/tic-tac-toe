@@ -61,6 +61,8 @@ pub trait Board: Default + Display {
 
     fn iter(&self) -> impl Iterator<Item = Option<PlayerId>>;
 
+    fn reset(&mut self);
+
     fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cc = |i: u8| match self.get_unchecked(i) {
             Some(PlayerId::X) => 'X',

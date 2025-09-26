@@ -7,10 +7,12 @@ use crate::{
 };
 
 pub mod human;
+pub mod q_table;
 pub mod random;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Display)]
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Display, Hash)]
 pub enum PlayerId {
+    #[default]
     X,
     O,
 }
@@ -33,4 +35,6 @@ pub enum MoveStrategyEnum {
 #[enum_dispatch(MoveStrategyEnum)]
 pub trait MoveStrategy {
     fn get_move(&mut self, board: &impl Board) -> BoardIdx;
+
+    fn reset(&mut self);
 }

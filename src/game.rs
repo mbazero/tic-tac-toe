@@ -18,12 +18,20 @@ impl GameState {
     }
 }
 
+impl Default for GameState {
+    fn default() -> Self {
+        Self::Ongoing {
+            next_player: PlayerId::default(),
+        }
+    }
+}
+
 pub struct Game<B: Board, X: MoveStrategy, O: MoveStrategy> {
-    board: B,
-    player_x: X,
-    player_o: O,
-    state: GameState,
-    turns: usize,
+    pub board: B,
+    pub player_x: X,
+    pub player_o: O,
+    pub state: GameState,
+    pub turns: usize,
 }
 
 impl<B: Board, X: MoveStrategy, O: MoveStrategy> Game<B, X, O> {
@@ -32,9 +40,7 @@ impl<B: Board, X: MoveStrategy, O: MoveStrategy> Game<B, X, O> {
             board,
             player_x,
             player_o,
-            state: GameState::Ongoing {
-                next_player: PlayerId::X,
-            },
+            state: GameState::default(),
             turns: 0,
         }
     }
@@ -66,6 +72,15 @@ impl<B: Board, X: MoveStrategy, O: MoveStrategy> Game<B, X, O> {
         };
 
         self.state
+    }
+
+    // TODO: Remove resets
+    pub fn reset(&mut self) {
+        self.board.reset();
+        self.player_x.reset();
+        self.player_o.reset();
+        self.state = GameState::default();
+        self.turns = 0;
     }
 }
 
@@ -152,6 +167,10 @@ mod tests {
                 .borrow_mut()
                 .pop_front()
                 .expect("scripted strategy ran out of moves")
+        }
+
+        fn reset(&mut self) {
+            panic!("cannot reset scripted strategy");
         }
     }
 

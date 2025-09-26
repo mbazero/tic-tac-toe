@@ -43,6 +43,10 @@ impl Board for ArrayBoard {
     fn iter(&self) -> impl Iterator<Item = Option<PlayerId>> {
         self.0.iter().copied()
     }
+
+    fn reset(&mut self) {
+        self.0.fill(None);
+    }
 }
 
 impl Display for ArrayBoard {

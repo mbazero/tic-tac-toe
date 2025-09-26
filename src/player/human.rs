@@ -43,6 +43,8 @@ impl MoveStrategy for HumanMoveStrategy {
             }
         }
     }
+
+    fn reset(&mut self) {}
 }
 
 #[derive(Copy, Clone, Debug)]

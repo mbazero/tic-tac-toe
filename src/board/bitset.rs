@@ -14,7 +14,7 @@ macro_rules! bitmask {
     }};
 }
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub struct BitsetBoard {
     x_moves: u16,
     o_moves: u16,
@@ -73,6 +73,10 @@ impl Board for BitsetBoard {
 
     fn iter(&self) -> impl Iterator<Item = Option<PlayerId>> {
         (0u8..9).map(|i| self.get_unchecked(i))
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
     }
 }
 
