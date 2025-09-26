@@ -1,5 +1,2 @@
-- [ ] Extract board, game, and move strats
-- [ ] Refactor game to contain move strategies and run loop etc
 - [ ] Generate comprehensive testing
-- [ ] Improve existing board performance with arrays
 - [ ] Add bitmap board
