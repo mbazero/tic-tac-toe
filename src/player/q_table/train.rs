@@ -1,11 +1,16 @@
-use rand::{Rng, rngs::ThreadRng};
+use std::ptr::NonNull;
+
+use rand::{
+    Rng, SeedableRng,
+    rngs::{StdRng, ThreadRng},
+};
 
 use crate::{
     board::{Board, BoardIdx, bitset::BitsetBoard},
     game::{Game, GameState},
     player::{
         MoveStrategy, PlayerId,
-        q_table::{Action, QTable, QTableMoveStrategy, Reward, State},
+        q_table::{QTable, QTableMoveStrategy, State, StateAction},
         random::RandomMoveStrategy,
     },
 };
@@ -14,6 +19,7 @@ struct Params {
     update: UpdateParams,
     training: TrainingParams,
     explore: ExploreParams,
+    rng_seed: Option<u64>,
 }
 
 struct UpdateParams {
@@ -50,22 +56,25 @@ impl ExploreParams {
     }
 }
 
-#[derive(Default)]
 struct EpsilonGreedyMoveStrategy {
-    rng: ThreadRng,
+    rng: StdRng,
     epsilon: f64,
     q_table_strat: QTableMoveStrategy,
     random_strat: RandomMoveStrategy,
 }
 
 impl EpsilonGreedyMoveStrategy {
-    fn new(player_id: PlayerId) -> Self {
+    fn new(player_id: PlayerId, params: &ExploreParams, rng_seed: Option<u64>) -> Self {
         Self {
+            rng: rng_seed
+                .map(StdRng::seed_from_u64)
+                .unwrap_or_else(|| StdRng::from_os_rng()),
+            epsilon: params.get_epsilon(0),
             q_table_strat: QTableMoveStrategy {
                 player_id,
                 ..Default::default()
             },
-            ..Default::default()
+            random_strat: RandomMoveStrategy::default(),
         }
     }
 }
@@ -78,26 +87,98 @@ impl MoveStrategy for EpsilonGreedyMoveStrategy {
             self.q_table_strat.get_move(board)
         }
     }
-
-    fn reset(&mut self) {}
 }
 
-pub fn train(params: Params) -> QTable<State, Action, Reward> {
+impl MoveStrategy for NonNull<EpsilonGreedyMoveStrategy> {
+    fn get_move(&mut self, board: &impl Board) -> BoardIdx {
+        unsafe { self.as_mut().get_move(board) }
+    }
+}
+
+// Q(s, a) += learning_rate * [reward + discount_factor * argmax_a(Q(s', a')) - Q(s, a)]
+
+struct UpdateFunction {
+    discount_factor: f64,
+    learning_rate: f64,
+}
+
+impl UpdateFunction {
+    fn new(params: UpdateParams) -> Self {
+        Self {
+            discount_factor: params.discount_factor,
+            learning_rate: params.learning_rate,
+        }
+    }
+
+    fn apply_update(
+        &self,
+        reward: f64,
+        cur_sa: StateAction,
+        next_state: Option<State>,
+        q_table: &mut QTable,
+    ) {
+        q_table[cur_sa] += self.learning_rate
+            * (reward
+                + self.discount_factor * next_state.map(|s| q_table.action_max(s)).unwrap_or(0.0)
+                - q_table[cur_sa]);
+    }
+}
+
+pub fn train(params: Params) -> QTable {
+    let mut move_strat =
+        EpsilonGreedyMoveStrategy::new(PlayerId::X, &params.explore, params.rng_seed);
+    let q_table = &mut move_strat.q_table_strat.q_table;
+    let update_fn = UpdateFunction::new(params.update);
+
     let mut game = Game::new(
         BitsetBoard::default(),
-        EpsilonGreedyMoveStrategy::new(PlayerId::X),
-        EpsilonGreedyMoveStrategy::new(PlayerId::O),
+        NonNull::from_ref(&move_strat),
+        NonNull::from_ref(&move_strat),
     );
 
     for i in 0..params.training.num_episodes {
-        loop {
-            match game.advance() {
-                GameState::Ongoing { next_player } => todo!(),
-                GameState::Won { winner } => todo!(),
-                GameState::Tied => todo!(),
-            }
+        while !game.state.is_finished() {
+            game.advance();
+            let (x_reward, o_reward) = match game.state {
+                GameState::Ongoing | GameState::Tied => (0.0, 0.0),
+                GameState::Won => match game.cur_player {
+                    PlayerId::X => (1.0, -1.0),
+                    PlayerId::O => (-1.0, 1.0),
+                },
+            };
+
+            // update_fn.apply_update(reward, cur_sa, next_state, q_table);
         }
     }
 
     todo!()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::player::q_table::train::{Params, train};
+
+    use super::{ExploreParams, TrainingParams, UpdateParams};
+
+    #[test]
+    fn test_train() {
+        let params = Params {
+            update: UpdateParams {
+                discount_factor: 1.0,
+                learning_rate: 0.1,
+            },
+            training: TrainingParams {
+                num_episodes: 10_000,
+                max_steps_per_episode: 9,
+            },
+            explore: ExploreParams::EpsilonDecay {
+                epsilon_start: 1.0,
+                epsilon_end: 0.1,
+                epsilon_decay: 0.001,
+            },
+            rng_seed: Some(42),
+        };
+
+        let q_table = train(params);
+    }
 }

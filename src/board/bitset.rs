@@ -16,8 +16,8 @@ macro_rules! bitmask {
 
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub struct BitsetBoard {
-    x_moves: u16,
-    o_moves: u16,
+    pub x_positions: u16,
+    pub o_positions: u16,
 }
 
 impl BitsetBoard {
@@ -35,31 +35,31 @@ impl BitsetBoard {
         bitmask![2, 4, 6],
     ];
 
-    fn moves(&self, player: PlayerId) -> u16 {
+    fn positions(&self, player: PlayerId) -> u16 {
         match player {
-            PlayerId::X => self.x_moves,
-            PlayerId::O => self.o_moves,
+            PlayerId::X => self.x_positions,
+            PlayerId::O => self.o_positions,
         }
     }
 
-    fn moves_mut(&mut self, player: PlayerId) -> &mut u16 {
+    fn positions_mut(&mut self, player: PlayerId) -> &mut u16 {
         match player {
-            PlayerId::X => &mut self.x_moves,
-            PlayerId::O => &mut self.o_moves,
+            PlayerId::X => &mut self.x_positions,
+            PlayerId::O => &mut self.o_positions,
         }
     }
 }
 
 impl Board for BitsetBoard {
     fn set_unchecked(&mut self, idx: BoardIdx, player: PlayerId) {
-        *self.moves_mut(player) |= 1 << idx;
+        *self.positions_mut(player) |= 1 << idx;
     }
 
     fn get_unchecked(&self, idx: BoardIdx) -> Option<PlayerId> {
         let mask = 1 << idx;
-        if self.x_moves & mask != 0 {
+        if self.x_positions & mask != 0 {
             Some(PlayerId::X)
-        } else if self.o_moves & mask != 0 {
+        } else if self.o_positions & mask != 0 {
             Some(PlayerId::O)
         } else {
             None
@@ -67,7 +67,7 @@ impl Board for BitsetBoard {
     }
 
     fn is_winner(&self, player: PlayerId) -> bool {
-        let moves = self.moves(player);
+        let moves = self.positions(player);
         Self::WIN_MASKS.into_iter().any(|mask| mask & moves == mask)
     }
 

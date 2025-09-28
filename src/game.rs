@@ -4,24 +4,16 @@ use crate::{MoveStrategy, board::Board, player::PlayerId};
 
 #[derive(Copy, Clone, Debug)]
 pub enum GameState {
-    Ongoing { next_player: PlayerId },
-    Won { winner: PlayerId },
+    Ongoing,
+    Won,
     Tied,
 }
 
 impl GameState {
     pub fn is_finished(self) -> bool {
         match self {
-            GameState::Ongoing { .. } => false,
-            GameState::Won { .. } | GameState::Tied => true,
-        }
-    }
-}
-
-impl Default for GameState {
-    fn default() -> Self {
-        Self::Ongoing {
-            next_player: PlayerId::default(),
+            GameState::Ongoing => false,
+            GameState::Won | GameState::Tied => true,
         }
     }
 }
@@ -30,6 +22,7 @@ pub struct Game<B: Board, X: MoveStrategy, O: MoveStrategy> {
     pub board: B,
     pub player_x: X,
     pub player_o: O,
+    pub cur_player: PlayerId,
     pub state: GameState,
     pub turns: usize,
 }
@@ -40,47 +33,35 @@ impl<B: Board, X: MoveStrategy, O: MoveStrategy> Game<B, X, O> {
             board,
             player_x,
             player_o,
-            state: GameState::default(),
+            cur_player: PlayerId::X,
+            state: GameState::Ongoing,
             turns: 0,
         }
     }
 
     pub fn advance(&mut self) -> GameState {
-        let GameState::Ongoing {
-            next_player: cur_player,
-        } = self.state
-        else {
+        if self.state.is_finished() {
             return self.state;
-        };
+        }
 
-        let move_idx = match cur_player {
+        let move_idx = match self.cur_player {
             PlayerId::X => self.player_x.get_move(&self.board),
             PlayerId::O => self.player_o.get_move(&self.board),
         };
 
-        self.board.set_unchecked(move_idx, cur_player);
+        self.board.set_unchecked(move_idx, self.cur_player);
         self.turns += 1;
 
-        self.state = if self.board.is_winner(cur_player) {
-            GameState::Won { winner: cur_player }
+        self.state = if self.board.is_winner(self.cur_player) {
+            GameState::Won
         } else if self.turns == 9 {
             GameState::Tied
         } else {
-            GameState::Ongoing {
-                next_player: cur_player.other(),
-            }
+            self.cur_player = self.cur_player.other();
+            GameState::Ongoing
         };
 
         self.state
-    }
-
-    // TODO: Remove resets
-    pub fn reset(&mut self) {
-        self.board.reset();
-        self.player_x.reset();
-        self.player_o.reset();
-        self.state = GameState::default();
-        self.turns = 0;
     }
 }
 
@@ -89,12 +70,12 @@ impl<B: Board, X: MoveStrategy, O: MoveStrategy> Display for Game<B, X, O> {
         writeln!(f, "{}", self.board)?;
 
         match self.state {
-            GameState::Ongoing { next_player } => {
+            GameState::Ongoing => {
                 writeln!(f, "Turn number: {}", self.turns)?;
-                write!(f, "Next player: {next_player}")?;
+                write!(f, "Next player: {}", self.cur_player)?;
             }
-            GameState::Won { winner } => {
-                write!(f, "PLAYER {winner} WON!")?;
+            GameState::Won => {
+                write!(f, "PLAYER {} WON!", self.cur_player)?;
             }
             GameState::Tied => {
                 write!(f, "GAME TIED!")?;
@@ -168,10 +149,6 @@ mod tests {
                 .pop_front()
                 .expect("scripted strategy ran out of moves")
         }
-
-        fn reset(&mut self) {
-            panic!("cannot reset scripted strategy");
-        }
     }
 
     fn make_game<F: BoardFactory>(
@@ -198,14 +175,14 @@ mod tests {
         let (mut game, x_tracker, o_tracker) = make_game(&factory, vec![0, 2], vec![1, 3]);
 
         match game.advance() {
-            GameState::Ongoing { next_player } => assert_eq!(next_player, PlayerId::O),
+            GameState::Ongoing => assert_eq!(game.cur_player, PlayerId::O),
             other => panic!("expected ongoing state after first move, got {other:?}"),
         }
         assert_eq!(x_tracker.call_count(), 1);
         assert_eq!(o_tracker.call_count(), 0);
 
         match game.advance() {
-            GameState::Ongoing { next_player } => assert_eq!(next_player, PlayerId::X),
+            GameState::Ongoing => assert_eq!(game.cur_player, PlayerId::X),
             other => panic!("expected player X to be next, got {other:?}"),
         }
         assert_eq!(x_tracker.call_count(), 1);
@@ -224,7 +201,7 @@ mod tests {
         }
 
         match game.advance() {
-            GameState::Won { winner } => assert_eq!(winner, PlayerId::X),
+            GameState::Won => assert_eq!(game.cur_player, PlayerId::X),
             other => panic!("expected X to win on fifth move, got {other:?}"),
         }
 
@@ -232,7 +209,7 @@ mod tests {
         let o_calls = o_tracker.call_count();
 
         match game.advance() {
-            GameState::Won { winner } => assert_eq!(winner, PlayerId::X),
+            GameState::Won => assert_eq!(game.cur_player, PlayerId::X),
             other => panic!("expected game to remain won after completion, got {other:?}"),
         }
         assert_eq!(x_tracker.call_count(), x_calls);
@@ -251,7 +228,7 @@ mod tests {
         }
 
         match game.advance() {
-            GameState::Won { winner } => assert_eq!(winner, PlayerId::O),
+            GameState::Won => assert_eq!(game.cur_player, PlayerId::O),
             other => panic!("expected O to win on sixth move, got {other:?}"),
         }
 
@@ -259,7 +236,7 @@ mod tests {
         let o_calls = o_tracker.call_count();
 
         match game.advance() {
-            GameState::Won { winner } => assert_eq!(winner, PlayerId::O),
+            GameState::Won => assert_eq!(game.cur_player, PlayerId::O),
             other => panic!("expected game to remain won after completion, got {other:?}"),
         }
         assert_eq!(x_tracker.call_count(), x_calls);
@@ -340,18 +317,8 @@ mod tests {
 
     #[test]
     fn game_state_is_finished_checks() {
-        assert!(
-            !GameState::Ongoing {
-                next_player: PlayerId::X
-            }
-            .is_finished()
-        );
-        assert!(
-            GameState::Won {
-                winner: PlayerId::O
-            }
-            .is_finished()
-        );
+        assert!(!GameState::Ongoing.is_finished());
+        assert!(GameState::Won.is_finished());
         assert!(GameState::Tied.is_finished());
     }
 }

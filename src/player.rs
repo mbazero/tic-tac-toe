@@ -35,6 +35,4 @@ pub enum MoveStrategyEnum {
 #[enum_dispatch(MoveStrategyEnum)]
 pub trait MoveStrategy {
     fn get_move(&mut self, board: &impl Board) -> BoardIdx;
-
-    fn reset(&mut self);
 }

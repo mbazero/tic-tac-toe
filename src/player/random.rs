@@ -18,8 +18,4 @@ impl MoveStrategy for RandomMoveStrategy {
             .collect();
         *open_squares.choose(&mut self.rng).unwrap()
     }
-
-    fn reset(&mut self) {
-        self.rng.reseed();
-    }
 }
