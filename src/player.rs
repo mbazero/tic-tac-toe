@@ -3,6 +3,7 @@ use strum::Display;
 
 use crate::{
     board::{Board, BoardIdx},
+    game::GameStateRef,
     player::{human::HumanMoveStrategy, random::RandomMoveStrategy},
 };
 
@@ -34,5 +35,5 @@ pub enum MoveStrategyEnum {
 
 #[enum_dispatch(MoveStrategyEnum)]
 pub trait MoveStrategy {
-    fn get_move(&mut self, board: &impl Board) -> BoardIdx;
+    fn get_move<B: Board>(&mut self, game_state: GameStateRef<'_, B>) -> BoardIdx;
 }

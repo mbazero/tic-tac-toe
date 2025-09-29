@@ -1,5 +1,10 @@
-use std::ptr::NonNull;
+use std::{
+    cell::UnsafeCell,
+    ops::{Index, IndexMut},
+    ptr::NonNull,
+};
 
+use ordered_float::OrderedFloat;
 use rand::{
     Rng, SeedableRng,
     rngs::{StdRng, ThreadRng},
@@ -7,10 +12,10 @@ use rand::{
 
 use crate::{
     board::{Board, BoardIdx, bitset::BitsetBoard},
-    game::{Game, GameState},
+    game::{Game, GameStateRef, GameStatus},
     player::{
         MoveStrategy, PlayerId,
-        q_table::{Action, QTable, QTableMoveStrategy, State, StateAction},
+        q_table::{Action, QTable, QTableMoveStrategy, Reward, State, StateAction},
         random::RandomMoveStrategy,
     },
 };
@@ -61,18 +66,16 @@ struct EpsilonGreedyMoveStrategy {
     epsilon: f64,
     q_table_strat: QTableMoveStrategy,
     random_strat: RandomMoveStrategy,
-    // last_move: Option<BoardIdx>,
 }
 
 impl EpsilonGreedyMoveStrategy {
-    fn new(player_id: PlayerId, params: &ExploreParams, rng_seed: Option<u64>) -> Self {
+    fn new(params: &ExploreParams, rng_seed: Option<u64>) -> Self {
         Self {
             rng: rng_seed
                 .map(StdRng::seed_from_u64)
-                .unwrap_or_else(|| StdRng::from_os_rng()),
+                .unwrap_or_else(StdRng::from_os_rng),
             epsilon: params.get_epsilon(0),
             q_table_strat: QTableMoveStrategy {
-                player_id,
                 ..Default::default()
             },
             random_strat: RandomMoveStrategy::default(),
@@ -81,18 +84,18 @@ impl EpsilonGreedyMoveStrategy {
 }
 
 impl MoveStrategy for EpsilonGreedyMoveStrategy {
-    fn get_move(&mut self, board: &impl Board) -> BoardIdx {
+    fn get_move<B: Board>(&mut self, game_state: GameStateRef<'_, B>) -> BoardIdx {
         if self.rng.random::<f64>() < self.epsilon {
-            self.random_strat.get_move(board)
+            self.random_strat.get_move(game_state)
         } else {
-            self.q_table_strat.get_move(board)
+            self.q_table_strat.get_move(game_state)
         }
     }
 }
 
-impl MoveStrategy for NonNull<EpsilonGreedyMoveStrategy> {
-    fn get_move(&mut self, board: &impl Board) -> BoardIdx {
-        unsafe { self.as_mut().get_move(board) }
+impl<'a> MoveStrategy for &'a UnsafeCell<EpsilonGreedyMoveStrategy> {
+    fn get_move<B: Board>(&mut self, game_state: GameStateRef<'_, B>) -> BoardIdx {
+        unsafe { (&mut *self.get()).get_move(game_state) }
     }
 }
 
@@ -111,8 +114,8 @@ impl UpdateFunction {
 
     fn apply_update(
         &self,
-        reward: f64,
-        cur_sa: StateAction,
+        state_action: StateAction,
+        reward: Reward,
         next_state: Option<State>,
         q_table: &mut QTable,
     ) {
@@ -122,45 +125,113 @@ impl UpdateFunction {
                     .action_max(next_state, Action::iter_available(&next_state.1))
                     .expect("no action available")
                     .1
+                    .0
             }
             None => 0.0,
         };
-        q_table[cur_sa] += self.learning_rate
-            * (reward + self.discount_factor * max_next_q_value - q_table[cur_sa]);
+        let cur_q_value = *q_table[state_action];
+        q_table[state_action] +=
+            self.learning_rate * (*reward + self.discount_factor * max_next_q_value - cur_q_value);
     }
 }
 
 pub fn train(params: Params) -> QTable {
-    let mut move_strat =
-        EpsilonGreedyMoveStrategy::new(PlayerId::X, &params.explore, params.rng_seed);
-    let q_table = &mut move_strat.q_table_strat.q_table;
-    let update_fn = UpdateFunction::new(params.update);
+    #[derive(Default)]
+    struct StateActions {
+        x_sa: Option<StateAction>,
+        o_sa: Option<StateAction>,
+    }
 
-    let mut game = Game::new(
-        BitsetBoard::default(),
-        NonNull::from_ref(&move_strat),
-        NonNull::from_ref(&move_strat),
-    );
+    impl Index<PlayerId> for StateActions {
+        type Output = Option<StateAction>;
 
-    for i in 0..params.training.num_episodes {
-        while !game.state.is_finished() {
-            let prev_board = game.board;
-            game.advance();
-            let next_board = game.board;
-
-            // let reward = match game.state {
-            //     GameState::Ongoing | GameState::Tied => 0.0,
-            //     GameState::Won => match game.cur_player {
-            //         PlayerId::X => (1.0, -1.0),
-            //         PlayerId::O => (-1.0, 1.0),
-            //     },
-            // };
-
-            // update_fn.apply_update(reward, cur_sa, next_state, q_table);
+        fn index(&self, index: PlayerId) -> &Self::Output {
+            match index {
+                PlayerId::X => &self.x_sa,
+                PlayerId::O => &self.o_sa,
+            }
         }
     }
 
-    todo!()
+    impl IndexMut<PlayerId> for StateActions {
+        fn index_mut(&mut self, index: PlayerId) -> &mut Self::Output {
+            match index {
+                PlayerId::X => &mut self.x_sa,
+                PlayerId::O => &mut self.o_sa,
+            }
+        }
+    }
+
+    let move_strat = UnsafeCell::new(EpsilonGreedyMoveStrategy::new(
+        &params.explore,
+        params.rng_seed,
+    ));
+    let update_fn = UpdateFunction::new(params.update);
+    let mut game = Game::new(BitsetBoard::default(), &move_strat, &move_strat);
+
+    for i in 0..params.training.num_episodes {
+        if i % 1000 == 0 {
+            println!("Training episode {i}...");
+        }
+
+        let mut prev_sas = StateActions::default();
+
+        let update_q_table = |player: PlayerId,
+                              state_action: StateAction,
+                              reward: f64,
+                              next_board: Option<BitsetBoard>| {
+            unsafe {
+                let q_table = &mut (&mut *move_strat.get()).q_table_strat.q_table;
+                update_fn.apply_update(
+                    state_action,
+                    reward.into(),
+                    next_board.map(|board| State(player, board)),
+                    q_table,
+                );
+            }
+        };
+
+        while !game.status.is_finished() {
+            let cur_player = game.cur_player;
+            let prev_player = game.turns.last().copied().map(|(player, _)| player);
+
+            // Extract current player state
+            let cur_state = State(cur_player, game.board);
+
+            // Advance game
+            game.advance();
+
+            // Extract current player action
+            let cur_action = Action(game.turns.last().copied().unwrap().1);
+
+            // Save current player state-action
+            prev_sas[cur_player] = Some(StateAction::new(cur_state, cur_action));
+
+            // Compute reward and update q-table for previous player
+            if let Some(prev_player) = prev_player {
+                let reward = match game.status {
+                    GameStatus::Ongoing | GameStatus::Tied => 0.0,
+                    GameStatus::Won => -1.0, // Previous player lost
+                };
+                update_q_table(
+                    prev_player,
+                    prev_sas[prev_player].unwrap(),
+                    reward,
+                    Some(game.board),
+                );
+            }
+        }
+
+        // Apply terminal update for winning player
+        update_q_table(
+            game.cur_player,
+            prev_sas[game.cur_player].unwrap(),
+            1.0,
+            None,
+        );
+    }
+
+    move_strat.into_inner().q_table_strat.q_table
 }
 
 #[cfg(test)]

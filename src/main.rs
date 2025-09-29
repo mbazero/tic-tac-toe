@@ -25,9 +25,9 @@ enum MoveStrategyArg {
 }
 
 impl MoveStrategyArg {
-    fn into_strategy(self, player: PlayerId) -> MoveStrategyEnum {
+    fn into_strat(self) -> MoveStrategyEnum {
         match self {
-            MoveStrategyArg::Human => HumanMoveStrategy::new(player).into(),
+            MoveStrategyArg::Human => HumanMoveStrategy::default().into(),
             MoveStrategyArg::Random => RandomMoveStrategy::default().into(),
         }
     }
@@ -49,8 +49,8 @@ fn main() -> Result<()> {
 
     let mut game = Game::new(
         BitsetBoard::default(),
-        args.x_strat.into_strategy(PlayerId::X),
-        args.o_strat.into_strategy(PlayerId::O),
+        args.x_strat.into_strat(),
+        args.o_strat.into_strat(),
     );
 
     println!("\n{game}\n");

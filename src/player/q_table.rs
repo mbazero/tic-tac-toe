@@ -1,8 +1,11 @@
 use std::cmp::Ordering;
 use std::hash::Hash;
-use std::ops::IndexMut;
+use std::ops::{Deref, IndexMut};
 use std::{collections::HashMap, ops::Index};
 
+use ordered_float::OrderedFloat;
+
+use crate::game::GameStateRef;
 use crate::{
     board::{Board, BoardIdx, bitset::BitsetBoard},
     player::{MoveStrategy, PlayerId},
@@ -35,13 +38,17 @@ impl AsBitsetBoard for BitsetBoard {
 
 #[derive(Default)]
 pub struct QTableMoveStrategy {
-    player_id: PlayerId,
     q_table: QTable,
 }
 
 impl MoveStrategy for QTableMoveStrategy {
-    fn get_move(&mut self, board: &impl Board) -> BoardIdx {
-        let state = State(self.player_id, board.as_bitset_board());
+    fn get_move<B: Board>(
+        &mut self,
+        GameStateRef {
+            cur_player, board, ..
+        }: GameStateRef<'_, B>,
+    ) -> BoardIdx {
+        let state = State(cur_player, board.as_bitset_board());
         let (action, _) = self
             .q_table
             .action_max(state, Action::iter_available(board))
@@ -78,6 +85,7 @@ impl Action {
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 struct StateAction(usize);
 
+#[allow(unused)]
 impl StateAction {
     const CARDINALITY: usize = State::CARDINALITY * Action::CARDINALITY;
     const ACTION_OFFSET: usize = 19;
@@ -118,24 +126,27 @@ impl StateAction {
     }
 }
 
+type Reward = OrderedFloat<f64>;
+type QValue = OrderedFloat<f64>;
+
 #[derive(Clone, Debug)]
-struct QTable(Box<[f64; StateAction::CARDINALITY]>);
+struct QTable(Box<[QValue; StateAction::CARDINALITY]>);
 
 impl QTable {
     fn action_max(
         &self,
         state: State,
         actions: impl IntoIterator<Item = Action>,
-    ) -> Option<(Action, f64)> {
+    ) -> Option<(Action, QValue)> {
         actions
             .into_iter()
             .map(|action| (action, self[StateAction::new(state, action)]))
-            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+            .max_by_key(|(_, reward)| *reward)
     }
 }
 
 impl Index<StateAction> for QTable {
-    type Output = f64;
+    type Output = QValue;
 
     fn index(&self, index: StateAction) -> &Self::Output {
         &self.0[index.0]
@@ -150,7 +161,7 @@ impl IndexMut<StateAction> for QTable {
 
 impl Default for QTable {
     fn default() -> Self {
-        let table = vec![0.0; StateAction::CARDINALITY]
+        let table = vec![QValue::default(); StateAction::CARDINALITY]
             .into_boxed_slice()
             .try_into()
             .unwrap();
@@ -170,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_state_action_packing() {
-        let board = BitsetBoard::with_positions([0, 4, 7], [1, 3]);
+        let board = BitsetBoard::with_positions([0, 4, 7], [1, 3]).unwrap();
         let player = PlayerId::O;
         let action = 5;
 
