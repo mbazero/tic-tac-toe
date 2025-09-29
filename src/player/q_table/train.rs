@@ -37,19 +37,22 @@ pub enum ExploreParams {
     EpsilonDecay {
         epsilon_start: f64,
         epsilon_end: f64,
-        epsilon_decay: f64,
+        decay_steps: u64,
     },
 }
 
 impl ExploreParams {
-    pub fn get_epsilon(&self, episode: u64) -> f64 {
-        match self {
-            ExploreParams::FixedEpsilon { epsilon } => *epsilon,
+    fn get_epsilon(&self, episode: u64) -> f64 {
+        match *self {
+            ExploreParams::FixedEpsilon { epsilon } => epsilon,
             ExploreParams::EpsilonDecay {
                 epsilon_start,
                 epsilon_end,
-                epsilon_decay,
-            } => (*epsilon_end).max(*epsilon_start - *epsilon_decay * episode as f64),
+                decay_steps,
+            } => f64::max(
+                epsilon_end,
+                epsilon_start - (epsilon_start - epsilon_end) * episode as f64 / decay_steps as f64,
+            ),
         }
     }
 }
@@ -294,7 +297,7 @@ mod tests {
             explore: ExploreParams::EpsilonDecay {
                 epsilon_start: 1.0,
                 epsilon_end: 0.1,
-                epsilon_decay: 0.001,
+                decay_steps: 8_000,
             },
             rng_seed: Some(42),
         };
