@@ -78,6 +78,13 @@ impl Board for BitsetBoard {
     fn reset(&mut self) {
         *self = Self::default();
     }
+
+    fn check_set(&self, idx: BoardIdx) -> Result<(), super::SetError> {
+        if self.get(idx)?.is_some() {
+            return Err(super::SetError::CellOccupied);
+        }
+        Ok(())
+    }
 }
 
 impl Display for BitsetBoard {

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::hash::Hash;
 use std::ops::IndexMut;
 use std::{collections::HashMap, ops::Index};
@@ -9,6 +10,29 @@ use crate::{
 
 pub mod train;
 
+trait AsBitsetBoard {
+    fn as_bitset_board(&self) -> BitsetBoard;
+}
+
+impl<T: Board> AsBitsetBoard for &T {
+    fn as_bitset_board(&self) -> BitsetBoard {
+        let mut bitset_board = BitsetBoard::default();
+        for i in 0..9 {
+            if let Some(player) = self.get_unchecked(i) {
+                bitset_board.set_unchecked(i, player);
+            }
+        }
+        bitset_board
+    }
+}
+
+// Use autoref specialization for efficient impl on BitsetBoard instances
+impl AsBitsetBoard for BitsetBoard {
+    fn as_bitset_board(&self) -> BitsetBoard {
+        *self
+    }
+}
+
 #[derive(Default)]
 pub struct QTableMoveStrategy {
     player_id: PlayerId,
@@ -17,65 +41,80 @@ pub struct QTableMoveStrategy {
 
 impl MoveStrategy for QTableMoveStrategy {
     fn get_move(&mut self, board: &impl Board) -> BoardIdx {
-        todo!()
+        let state = State(self.player_id, board.as_bitset_board());
+        let (action, _) = self
+            .q_table
+            .action_max(state, Action::iter_available(board))
+            .expect("no action found");
+        action.0
     }
 }
 
-struct State {
-    player_id: bool,
-    x_positions: u16,
-    o_positions: u16,
-}
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+struct State(PlayerId, BitsetBoard);
 
 impl State {
     const CARDINALITY: usize = 1 << 19;
 }
 
-struct Action {
-    move_idx: u8,
-}
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+struct Action(BoardIdx);
 
 impl Action {
-    const CARDINALITY: usize = 1 << 9;
+    const CARDINALITY: usize = 9;
+
+    fn iter() -> impl Iterator<Item = Action> {
+        (0..9).map(Action)
+    }
+
+    fn iter_available(board: &impl Board) -> impl Iterator<Item = Action> {
+        board
+            .iter()
+            .zip(0..9)
+            .filter_map(|(opt, i)| opt.is_none().then_some(Action(i)))
+    }
 }
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 struct StateAction(usize);
 
 impl StateAction {
-    // NOW: Fix this shit
-    const NUM_BITS: usize = 19;
-    const CARDINALITY: usize = 1 << StateAction::NUM_BITS;
+    const CARDINALITY: usize = State::CARDINALITY * Action::CARDINALITY;
+    const ACTION_OFFSET: usize = 19;
+    const PLAYER_ID_OFFSET: usize = 18;
+    const X_POSITIONS_OFFSET: usize = 9;
+    const O_POSITIONS_OFFSET: usize = 0;
+    const ACTION_MASK: usize = 0x000F;
+    const PLAYER_ID_MASK: usize = 0x0001;
     const POSITIONS_MASK: usize = 0x01FF;
 
     fn new(state: State, action: Action) -> Self {
         Self(
-            ((action.move_idx as usize) << 19)
-                & ((state.player_id as usize) << 18)
-                & ((state.x_positions as usize) << 9)
-                & (state.o_positions as usize),
+            (action.0 as usize) << Self::ACTION_OFFSET
+                | (state.0 as usize) << Self::PLAYER_ID_OFFSET
+                | (state.1.x_positions as usize) << Self::X_POSITIONS_OFFSET
+                | (state.1.o_positions as usize) << Self::O_POSITIONS_OFFSET,
         )
     }
 
-    fn iter_actions(state: State) -> impl Iterator<Item = Self> {
-        todo!();
-        std::iter::empty()
+    fn action(self) -> Action {
+        Action((self.0 >> Self::ACTION_OFFSET & Self::ACTION_MASK) as u8)
     }
 
     fn player_id(self) -> PlayerId {
-        if self.0 >> 18 == 0 {
+        if self.0 >> Self::PLAYER_ID_OFFSET & Self::PLAYER_ID_MASK == 0 {
             PlayerId::X
         } else {
             PlayerId::O
         }
     }
 
-    fn player_x_positions(self) -> usize {
-        self.0 & Self::POSITIONS_MASK
+    fn x_positions(self) -> usize {
+        self.0 >> Self::X_POSITIONS_OFFSET & Self::POSITIONS_MASK
     }
 
-    fn player_o_positions(self) -> usize {
-        (self.0 >> 9) & Self::POSITIONS_MASK
+    fn o_positions(self) -> usize {
+        self.0 >> Self::O_POSITIONS_OFFSET & Self::POSITIONS_MASK
     }
 }
 
@@ -83,11 +122,15 @@ impl StateAction {
 struct QTable(Box<[f64; StateAction::CARDINALITY]>);
 
 impl QTable {
-    fn action_max(&self, state: State) -> f64 {
-        StateAction::iter_actions(state)
-            .map(|sa| self[sa])
-            .reduce(f64::max)
-            .expect("action max should exist")
+    fn action_max(
+        &self,
+        state: State,
+        actions: impl IntoIterator<Item = Action>,
+    ) -> Option<(Action, f64)> {
+        actions
+            .into_iter()
+            .map(|action| (action, self[StateAction::new(state, action)]))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
     }
 }
 
@@ -107,11 +150,35 @@ impl IndexMut<StateAction> for QTable {
 
 impl Default for QTable {
     fn default() -> Self {
-        Self(
-            vec![0.0; StateAction::CARDINALITY]
-                .into_boxed_slice()
-                .try_into()
-                .unwrap(),
-        )
+        let table = vec![0.0; StateAction::CARDINALITY]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
+        Self(table)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        board::{Board, bitset::BitsetBoard},
+        player::{
+            PlayerId,
+            q_table::{Action, State, StateAction},
+        },
+    };
+
+    #[test]
+    fn test_state_action_packing() {
+        let board = BitsetBoard::with_positions([0, 4, 7], [1, 3]);
+        let player = PlayerId::O;
+        let action = 5;
+
+        let sa = StateAction::new(State(player, board), Action(action));
+
+        assert_eq!(board.x_positions as usize, sa.x_positions());
+        assert_eq!(board.o_positions as usize, sa.o_positions());
+        assert_eq!(player, sa.player_id());
+        assert_eq!(action, sa.action().0);
     }
 }

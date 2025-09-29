@@ -10,7 +10,7 @@ use crate::{
     game::{Game, GameState},
     player::{
         MoveStrategy, PlayerId,
-        q_table::{QTable, QTableMoveStrategy, State, StateAction},
+        q_table::{Action, QTable, QTableMoveStrategy, State, StateAction},
         random::RandomMoveStrategy,
     },
 };
@@ -61,6 +61,7 @@ struct EpsilonGreedyMoveStrategy {
     epsilon: f64,
     q_table_strat: QTableMoveStrategy,
     random_strat: RandomMoveStrategy,
+    // last_move: Option<BoardIdx>,
 }
 
 impl EpsilonGreedyMoveStrategy {
@@ -95,8 +96,6 @@ impl MoveStrategy for NonNull<EpsilonGreedyMoveStrategy> {
     }
 }
 
-// Q(s, a) += learning_rate * [reward + discount_factor * argmax_a(Q(s', a')) - Q(s, a)]
-
 struct UpdateFunction {
     discount_factor: f64,
     learning_rate: f64,
@@ -117,10 +116,17 @@ impl UpdateFunction {
         next_state: Option<State>,
         q_table: &mut QTable,
     ) {
+        let max_next_q_value = match next_state {
+            Some(next_state) => {
+                q_table
+                    .action_max(next_state, Action::iter_available(&next_state.1))
+                    .expect("no action available")
+                    .1
+            }
+            None => 0.0,
+        };
         q_table[cur_sa] += self.learning_rate
-            * (reward
-                + self.discount_factor * next_state.map(|s| q_table.action_max(s)).unwrap_or(0.0)
-                - q_table[cur_sa]);
+            * (reward + self.discount_factor * max_next_q_value - q_table[cur_sa]);
     }
 }
 
@@ -138,14 +144,17 @@ pub fn train(params: Params) -> QTable {
 
     for i in 0..params.training.num_episodes {
         while !game.state.is_finished() {
+            let prev_board = game.board;
             game.advance();
-            let (x_reward, o_reward) = match game.state {
-                GameState::Ongoing | GameState::Tied => (0.0, 0.0),
-                GameState::Won => match game.cur_player {
-                    PlayerId::X => (1.0, -1.0),
-                    PlayerId::O => (-1.0, 1.0),
-                },
-            };
+            let next_board = game.board;
+
+            // let reward = match game.state {
+            //     GameState::Ongoing | GameState::Tied => 0.0,
+            //     GameState::Won => match game.cur_player {
+            //         PlayerId::X => (1.0, -1.0),
+            //         PlayerId::O => (-1.0, 1.0),
+            //     },
+            // };
 
             // update_fn.apply_update(reward, cur_sa, next_state, q_table);
         }
@@ -156,12 +165,15 @@ pub fn train(params: Params) -> QTable {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+    use std::{fs::File, io::Write};
+
     use crate::player::q_table::train::{Params, train};
 
     use super::{ExploreParams, TrainingParams, UpdateParams};
 
     #[test]
-    fn test_train() {
+    fn test_train() -> Result<()> {
         let params = Params {
             update: UpdateParams {
                 discount_factor: 1.0,
@@ -180,5 +192,11 @@ mod tests {
         };
 
         let q_table = train(params);
+
+        let mut f = File::create("q_table")?;
+        let bytes = bytemuck::cast_slice(q_table.0.as_slice());
+        f.write_all(bytes)?;
+
+        Ok(())
     }
 }

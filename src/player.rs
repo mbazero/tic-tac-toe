@@ -13,8 +13,8 @@ pub mod random;
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Display, Hash)]
 pub enum PlayerId {
     #[default]
-    X,
-    O,
+    X = 0,
+    O = 1,
 }
 
 impl PlayerId {

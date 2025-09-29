@@ -1,6 +1,12 @@
 use std::fmt::Display;
 
-use crate::{MoveStrategy, board::Board, player::PlayerId};
+use smallvec::SmallVec;
+
+use crate::{
+    MoveStrategy,
+    board::{Board, BoardIdx},
+    player::PlayerId,
+};
 
 #[derive(Copy, Clone, Debug)]
 pub enum GameState {
@@ -24,7 +30,7 @@ pub struct Game<B: Board, X: MoveStrategy, O: MoveStrategy> {
     pub player_o: O,
     pub cur_player: PlayerId,
     pub state: GameState,
-    pub turns: usize,
+    pub turns: SmallVec<[(PlayerId, BoardIdx); 9]>,
 }
 
 impl<B: Board, X: MoveStrategy, O: MoveStrategy> Game<B, X, O> {
@@ -35,7 +41,7 @@ impl<B: Board, X: MoveStrategy, O: MoveStrategy> Game<B, X, O> {
             player_o,
             cur_player: PlayerId::X,
             state: GameState::Ongoing,
-            turns: 0,
+            turns: SmallVec::new(),
         }
     }
 
@@ -50,11 +56,11 @@ impl<B: Board, X: MoveStrategy, O: MoveStrategy> Game<B, X, O> {
         };
 
         self.board.set_unchecked(move_idx, self.cur_player);
-        self.turns += 1;
+        self.turns.push((self.cur_player, move_idx));
 
         self.state = if self.board.is_winner(self.cur_player) {
             GameState::Won
-        } else if self.turns == 9 {
+        } else if self.turns.len() == 9 {
             GameState::Tied
         } else {
             self.cur_player = self.cur_player.other();
@@ -71,7 +77,7 @@ impl<B: Board, X: MoveStrategy, O: MoveStrategy> Display for Game<B, X, O> {
 
         match self.state {
             GameState::Ongoing => {
-                writeln!(f, "Turn number: {}", self.turns)?;
+                writeln!(f, "Turn number: {}", self.turns.len())?;
                 write!(f, "Next player: {}", self.cur_player)?;
             }
             GameState::Won => {
