@@ -1,14 +1,7 @@
-use std::{
-    cell::UnsafeCell,
-    ops::{Index, IndexMut},
-    ptr::NonNull,
-};
+use std::cell::UnsafeCell;
 
-use ordered_float::OrderedFloat;
-use rand::{
-    Rng, SeedableRng,
-    rngs::{StdRng, ThreadRng},
-};
+use enum_map::EnumMap;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 use crate::{
     board::{Board, BoardIdx, bitset::BitsetBoard},
@@ -20,24 +13,24 @@ use crate::{
     },
 };
 
-struct Params {
-    update: UpdateParams,
-    training: TrainingParams,
-    explore: ExploreParams,
-    rng_seed: Option<u64>,
+pub struct Params {
+    pub update: UpdateParams,
+    pub training: TrainingParams,
+    pub explore: ExploreParams,
+    pub rng_seed: Option<u64>,
 }
 
-struct UpdateParams {
-    discount_factor: f64, // gamma
-    learning_rate: f64,   // alpha
+pub struct UpdateParams {
+    pub discount_factor: f64, // gamma
+    pub learning_rate: f64,   // alpha
 }
 
-struct TrainingParams {
-    num_episodes: u64,
-    max_steps_per_episode: u64,
+pub struct TrainingParams {
+    pub num_episodes: u64,
+    pub max_steps_per_episode: u64,
 }
 
-enum ExploreParams {
+pub enum ExploreParams {
     FixedEpsilon {
         epsilon: f64,
     },
@@ -49,7 +42,7 @@ enum ExploreParams {
 }
 
 impl ExploreParams {
-    fn get_epsilon(&self, episode: u64) -> f64 {
+    pub fn get_epsilon(&self, episode: u64) -> f64 {
         match self {
             ExploreParams::FixedEpsilon { epsilon } => *epsilon,
             ExploreParams::EpsilonDecay {
@@ -93,7 +86,7 @@ impl MoveStrategy for EpsilonGreedyMoveStrategy {
     }
 }
 
-impl<'a> MoveStrategy for &'a UnsafeCell<EpsilonGreedyMoveStrategy> {
+impl MoveStrategy for &UnsafeCell<EpsilonGreedyMoveStrategy> {
     fn get_move<B: Board>(&mut self, game_state: GameStateRef<'_, B>) -> BoardIdx {
         unsafe { (&mut *self.get()).get_move(game_state) }
     }
@@ -121,11 +114,16 @@ impl UpdateFunction {
     ) {
         let max_next_q_value = match next_state {
             Some(next_state) => {
-                q_table
-                    .action_max(next_state, Action::iter_available(&next_state.1))
-                    .expect("no action available")
-                    .1
-                    .0
+                match q_table.action_max(next_state, Action::iter_available(&next_state.1)) {
+                    Some((_, q_value)) => q_value.0,
+                    None => panic!(
+                        "failed to find next action\nplayer: {:?}\nprev_board:\n{}\naction: {}\nnext_board:\n{}",
+                        state_action.player_id(),
+                        state_action.board(),
+                        state_action.action().0,
+                        next_state.1,
+                    ),
+                }
             }
             None => 0.0,
         };
@@ -135,46 +133,18 @@ impl UpdateFunction {
     }
 }
 
-pub fn train(params: Params) -> QTable {
-    #[derive(Default)]
-    struct StateActions {
-        x_sa: Option<StateAction>,
-        o_sa: Option<StateAction>,
-    }
-
-    impl Index<PlayerId> for StateActions {
-        type Output = Option<StateAction>;
-
-        fn index(&self, index: PlayerId) -> &Self::Output {
-            match index {
-                PlayerId::X => &self.x_sa,
-                PlayerId::O => &self.o_sa,
-            }
-        }
-    }
-
-    impl IndexMut<PlayerId> for StateActions {
-        fn index_mut(&mut self, index: PlayerId) -> &mut Self::Output {
-            match index {
-                PlayerId::X => &mut self.x_sa,
-                PlayerId::O => &mut self.o_sa,
-            }
-        }
-    }
-
+pub fn train(params: Params) -> (QTable, EvalStats) {
+    // TODO: Only wrap QTable in unsafe cell
     let move_strat = UnsafeCell::new(EpsilonGreedyMoveStrategy::new(
         &params.explore,
         params.rng_seed,
     ));
     let update_fn = UpdateFunction::new(params.update);
-    let mut game = Game::new(BitsetBoard::default(), &move_strat, &move_strat);
+    let mut eval_stats = EvalStats::default();
 
     for i in 0..params.training.num_episodes {
-        if i % 1000 == 0 {
-            println!("Training episode {i}...");
-        }
-
-        let mut prev_sas = StateActions::default();
+        let mut game = Game::new(BitsetBoard::default(), &move_strat, &move_strat);
+        let mut prev_sas = EnumMap::default();
 
         let update_q_table = |player: PlayerId,
                               state_action: StateAction,
@@ -209,15 +179,17 @@ pub fn train(params: Params) -> QTable {
 
             // Compute reward and update q-table for previous player
             if let Some(prev_player) = prev_player {
-                let reward = match game.status {
-                    GameStatus::Ongoing | GameStatus::Tied => 0.0,
-                    GameStatus::Won => -1.0, // Previous player lost
+                let (reward, next_board) = match game.status {
+                    GameStatus::Ongoing => (0.0, Some(game.board)),
+                    GameStatus::Tied => (0.0, None),
+                    GameStatus::Won => (-1.0, None),
                 };
+
                 update_q_table(
                     prev_player,
                     prev_sas[prev_player].unwrap(),
                     reward,
-                    Some(game.board),
+                    next_board,
                 );
             }
         }
@@ -229,15 +201,80 @@ pub fn train(params: Params) -> QTable {
             1.0,
             None,
         );
+
+        if (i + 1) % 1000 == 0 {
+            eval_stats = eval(500, &move_strat);
+            println!("Episode {} win rate: {}", i + 1, eval_stats.win_rate());
+        }
     }
 
-    move_strat.into_inner().q_table_strat.q_table
+    (move_strat.into_inner().q_table_strat.q_table, eval_stats)
+}
+
+#[derive(Default, Clone, Eq, PartialEq)]
+pub struct EvalStats {
+    win_count: usize,
+    tie_count: usize,
+    loss_count: usize,
+}
+
+impl EvalStats {
+    pub fn total_count(&self) -> usize {
+        self.win_count + self.tie_count + self.loss_count
+    }
+
+    pub fn win_rate(&self) -> f64 {
+        self.win_count as f64 / self.total_count() as f64
+    }
+
+    pub fn tie_rate(&self) -> f64 {
+        self.tie_count as f64 / self.total_count() as f64
+    }
+
+    pub fn loss_rate(&self) -> f64 {
+        self.loss_count as f64 / self.total_count() as f64
+    }
+}
+
+fn eval(num_games: usize, move_strat: &UnsafeCell<EpsilonGreedyMoveStrategy>) -> EvalStats {
+    let old_epsilon = unsafe {
+        let move_strat = &mut *move_strat.get();
+        std::mem::replace(&mut move_strat.epsilon, 0.0)
+    };
+
+    let stats = (0..num_games).fold(EvalStats::default(), |mut stats, _| {
+        let mut game = Game::new(
+            BitsetBoard::default(),
+            move_strat,
+            RandomMoveStrategy::default(),
+        );
+
+        while !game.status.is_finished() {
+            game.advance();
+        }
+
+        match game.status {
+            GameStatus::Ongoing => unreachable!(),
+            GameStatus::Won => match game.cur_player {
+                PlayerId::X => stats.win_count += 1,
+                PlayerId::O => stats.loss_count += 1,
+            },
+            GameStatus::Tied => stats.tie_count += 1,
+        }
+
+        stats
+    });
+
+    unsafe {
+        (&mut *move_strat.get()).epsilon = old_epsilon;
+    }
+
+    stats
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use std::{fs::File, io::Write};
 
     use crate::player::q_table::train::{Params, train};
 
@@ -261,13 +298,7 @@ mod tests {
             },
             rng_seed: Some(42),
         };
-
-        let q_table = train(params);
-
-        let mut f = File::create("q_table")?;
-        let bytes = bytemuck::cast_slice(q_table.0.as_slice());
-        f.write_all(bytes)?;
-
+        let _ = train(params);
         Ok(())
     }
 }

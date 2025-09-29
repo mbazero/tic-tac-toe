@@ -1,7 +1,9 @@
-use std::cmp::Ordering;
+use anyhow::Result;
+use anyhow::anyhow;
 use std::hash::Hash;
-use std::ops::{Deref, IndexMut};
-use std::{collections::HashMap, ops::Index};
+use std::ops::Index;
+use std::ops::IndexMut;
+use std::path::Path;
 
 use ordered_float::OrderedFloat;
 
@@ -41,6 +43,12 @@ pub struct QTableMoveStrategy {
     q_table: QTable,
 }
 
+impl QTableMoveStrategy {
+    pub fn new(q_table: QTable) -> Self {
+        Self { q_table }
+    }
+}
+
 impl MoveStrategy for QTableMoveStrategy {
     fn get_move<B: Board>(
         &mut self,
@@ -58,23 +66,23 @@ impl MoveStrategy for QTableMoveStrategy {
 }
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct State(PlayerId, BitsetBoard);
+pub struct State(PlayerId, BitsetBoard);
 
 impl State {
     const CARDINALITY: usize = 1 << 19;
 }
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct Action(BoardIdx);
+pub struct Action(BoardIdx);
 
 impl Action {
     const CARDINALITY: usize = 9;
 
-    fn iter() -> impl Iterator<Item = Action> {
+    pub fn iter() -> impl Iterator<Item = Action> {
         (0..9).map(Action)
     }
 
-    fn iter_available(board: &impl Board) -> impl Iterator<Item = Action> {
+    pub fn iter_available(board: &impl Board) -> impl Iterator<Item = Action> {
         board
             .iter()
             .zip(0..9)
@@ -85,7 +93,6 @@ impl Action {
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 struct StateAction(usize);
 
-#[allow(unused)]
 impl StateAction {
     const CARDINALITY: usize = State::CARDINALITY * Action::CARDINALITY;
     const ACTION_OFFSET: usize = 19;
@@ -124,16 +131,25 @@ impl StateAction {
     fn o_positions(self) -> usize {
         self.0 >> Self::O_POSITIONS_OFFSET & Self::POSITIONS_MASK
     }
+
+    fn board(self) -> BitsetBoard {
+        BitsetBoard {
+            x_positions: self.x_positions() as u16,
+            o_positions: self.o_positions() as u16,
+        }
+    }
 }
 
 type Reward = OrderedFloat<f64>;
 type QValue = OrderedFloat<f64>;
 
 #[derive(Clone, Debug)]
-struct QTable(Box<[QValue; StateAction::CARDINALITY]>);
+pub struct QTable(Box<[QValue; StateAction::CARDINALITY]>);
 
 impl QTable {
-    fn action_max(
+    pub const DEFAULT_FILE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/artifacts/q_table");
+
+    pub fn action_max(
         &self,
         state: State,
         actions: impl IntoIterator<Item = Action>,
@@ -142,6 +158,21 @@ impl QTable {
             .into_iter()
             .map(|action| (action, self[StateAction::new(state, action)]))
             .max_by_key(|(_, reward)| *reward)
+    }
+
+    pub fn write_to_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        let bytes = bytemuck::cast_slice(self.0.as_slice());
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    pub fn read_from_file(path: impl AsRef<Path>) -> Result<Self> {
+        let bytes = std::fs::read(path)?;
+        let data = bytemuck::cast_slice(&bytes)
+            .to_vec()
+            .try_into()
+            .map_err(|_| anyhow!("Failed to cast q-table bytes"))?;
+        Ok(Self(data))
     }
 }
 

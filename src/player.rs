@@ -1,17 +1,18 @@
 use enum_dispatch::enum_dispatch;
+use enum_map::Enum;
 use strum::Display;
 
 use crate::{
     board::{Board, BoardIdx},
     game::GameStateRef,
-    player::{human::HumanMoveStrategy, random::RandomMoveStrategy},
+    player::{human::HumanMoveStrategy, q_table::QTableMoveStrategy, random::RandomMoveStrategy},
 };
 
 pub mod human;
 pub mod q_table;
 pub mod random;
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Display, Hash)]
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Display, Hash, Enum)]
 pub enum PlayerId {
     #[default]
     X = 0,
@@ -31,6 +32,7 @@ impl PlayerId {
 pub enum MoveStrategyEnum {
     HumanMoveStrategy,
     RandomMoveStrategy,
+    QTableMoveStrategy,
 }
 
 #[enum_dispatch(MoveStrategyEnum)]

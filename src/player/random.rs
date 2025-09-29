@@ -6,7 +6,7 @@ use crate::{
     player::MoveStrategy,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RandomMoveStrategy {
     rng: ThreadRng,
 }

@@ -3,23 +3,22 @@ use std::fmt::Display;
 use smallvec::SmallVec;
 
 use crate::{
-    MoveStrategy,
     board::{Board, BoardIdx},
-    player::PlayerId,
+    player::{MoveStrategy, PlayerId},
 };
 
 #[derive(Copy, Clone, Debug)]
 pub enum GameStatus {
     Ongoing,
-    Won,
     Tied,
+    Won,
 }
 
 impl GameStatus {
     pub fn is_finished(self) -> bool {
         match self {
             GameStatus::Ongoing => false,
-            GameStatus::Won | GameStatus::Tied => true,
+            GameStatus::Tied | GameStatus::Won => true,
         }
     }
 }
@@ -214,7 +213,7 @@ mod tests {
 
         for _ in 0..4 {
             match game.advance() {
-                GameStatus::Ongoing { .. } => {}
+                GameStatus::Ongoing => {}
                 other => panic!("expected ongoing status before final winning move, got {other:?}"),
             }
         }
@@ -241,7 +240,7 @@ mod tests {
 
         for _ in 0..5 {
             match game.advance() {
-                GameStatus::Ongoing { .. } => {}
+                GameStatus::Ongoing => {}
                 other => panic!("expected ongoing status before O's winning move, got {other:?}"),
             }
         }
@@ -269,7 +268,7 @@ mod tests {
 
         for turn in 0..8 {
             match game.advance() {
-                GameStatus::Ongoing { .. } => {}
+                GameStatus::Ongoing => {}
                 other => panic!(
                     "expected ongoing status before final tie move (turn {turn}), got {other:?}"
                 ),

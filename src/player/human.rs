@@ -9,7 +9,7 @@ use std::{
 use crate::{
     board::{Board, BoardIdx},
     game::GameStateRef,
-    player::{MoveStrategy, PlayerId},
+    player::MoveStrategy,
 };
 
 #[derive(Default)]

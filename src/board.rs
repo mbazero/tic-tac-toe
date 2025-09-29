@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use thiserror::Error;
 
-use crate::{board::bitset::BitsetBoard, player::PlayerId};
+use crate::player::PlayerId;
 
 pub mod array;
 pub mod bitset;
@@ -39,7 +39,6 @@ pub trait Board: Default + Display {
         Ok(())
     }
 
-    #[allow(unused)]
     fn set(&mut self, idx: BoardIdx, player: PlayerId) -> Result<(), SetError> {
         self.check_set(idx)?;
         self.set_unchecked(idx, player);
