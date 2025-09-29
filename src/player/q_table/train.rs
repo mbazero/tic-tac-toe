@@ -60,22 +60,28 @@ impl ExploreParams {
 struct EpsilonGreedyMoveStrategy {
     rng: StdRng,
     epsilon: f64,
+    explore_params: ExploreParams,
     q_table_strat: QTableMoveStrategy,
     random_strat: RandomMoveStrategy,
 }
 
 impl EpsilonGreedyMoveStrategy {
-    fn new(params: &ExploreParams, rng_seed: Option<u64>) -> Self {
+    fn new(params: ExploreParams, rng_seed: Option<u64>) -> Self {
         Self {
             rng: rng_seed
                 .map(StdRng::seed_from_u64)
                 .unwrap_or_else(StdRng::from_os_rng),
             epsilon: params.get_epsilon(0),
+            explore_params: params,
             q_table_strat: QTableMoveStrategy {
                 ..Default::default()
             },
             random_strat: RandomMoveStrategy::default(),
         }
+    }
+
+    fn set_episode(&mut self, episode: u64) {
+        self.epsilon = self.explore_params.get_epsilon(episode);
     }
 }
 
@@ -138,14 +144,20 @@ impl UpdateFunction {
 
 pub fn train(params: Params) -> (QTable, EvalStats) {
     // TODO: Only wrap QTable in unsafe cell
-    let move_strat = UnsafeCell::new(EpsilonGreedyMoveStrategy::new(
-        &params.explore,
+    let mut move_strat = UnsafeCell::new(EpsilonGreedyMoveStrategy::new(
+        params.explore,
         params.rng_seed,
     ));
     let update_fn = UpdateFunction::new(params.update);
     let mut eval_stats = EvalStats::default();
 
     for i in 0..params.training.num_episodes {
+        // HACK: Set e-greedy episode to properly compute epsilon
+        // The better approach is to re-construct e-greedy strat for each episode, but we can't do
+        // that until we refactor things to only wrap underlying QTable in unsafe cell per the TODO
+        // above.
+        move_strat.get_mut().set_episode(i);
+
         let mut game = Game::new(BitsetBoard::default(), &move_strat, &move_strat);
         let mut prev_sas = EnumMap::default();
 
@@ -201,7 +213,11 @@ pub fn train(params: Params) -> (QTable, EvalStats) {
         update_q_table(
             game.cur_player,
             prev_sas[game.cur_player].unwrap(),
-            1.0,
+            match game.status {
+                GameStatus::Ongoing => unreachable!(),
+                GameStatus::Tied => 0.0,
+                GameStatus::Won => 1.0,
+            },
             None,
         );
 

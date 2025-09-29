@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         },
         explore: ExploreParams::EpsilonDecay {
             epsilon_start: 1.0,
-            epsilon_end: 0.01,
+            epsilon_end: 0.1,
             decay_steps: 80_000,
         },
         rng_seed: Some(42),
