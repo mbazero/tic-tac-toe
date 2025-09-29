@@ -2,18 +2,16 @@ use anyhow::Result;
 use clap::Parser;
 use strum::{Display, EnumString};
 
-use crate::{
+use tic_tac_toe::{
     board::bitset::BitsetBoard,
     game::Game,
     player::{
-        MoveStrategy, MoveStrategyEnum, PlayerId, human::HumanMoveStrategy,
+        MoveStrategyEnum,
+        human::HumanMoveStrategy,
+        q_table::{QTable, QTableMoveStrategy},
         random::RandomMoveStrategy,
     },
 };
-
-mod board;
-mod game;
-mod player;
 
 #[derive(Copy, Clone, Debug, EnumString, Default, Display)]
 enum MoveStrategyArg {
@@ -22,13 +20,19 @@ enum MoveStrategyArg {
     Human,
     #[strum(serialize = "random", serialize = "r")]
     Random,
+    #[strum(serialize = "qtable", serialize = "q")]
+    QTable,
 }
 
 impl MoveStrategyArg {
-    fn into_strategy(self, player: PlayerId) -> MoveStrategyEnum {
+    fn into_strat(self) -> Result<MoveStrategyEnum> {
         match self {
-            MoveStrategyArg::Human => HumanMoveStrategy::new(player).into(),
-            MoveStrategyArg::Random => RandomMoveStrategy::default().into(),
+            MoveStrategyArg::Human => Ok(HumanMoveStrategy::default().into()),
+            MoveStrategyArg::Random => Ok(RandomMoveStrategy::default().into()),
+            MoveStrategyArg::QTable => {
+                let q_table = QTable::read_from_file(QTable::DEFAULT_FILE_PATH)?;
+                Ok(QTableMoveStrategy::new(q_table).into())
+            }
         }
     }
 }
@@ -49,8 +53,8 @@ fn main() -> Result<()> {
 
     let mut game = Game::new(
         BitsetBoard::default(),
-        args.x_strat.into_strategy(PlayerId::X),
-        args.o_strat.into_strategy(PlayerId::O),
+        args.x_strat.into_strat()?,
+        args.o_strat.into_strat()?,
     );
 
     println!("\n{game}\n");

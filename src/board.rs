@@ -39,7 +39,6 @@ pub trait Board: Default + Display {
         Ok(())
     }
 
-    #[allow(unused)]
     fn set(&mut self, idx: BoardIdx, player: PlayerId) -> Result<(), SetError> {
         self.check_set(idx)?;
         self.set_unchecked(idx, player);
@@ -60,6 +59,22 @@ pub trait Board: Default + Display {
     fn is_winner(&self, player: PlayerId) -> bool;
 
     fn iter(&self) -> impl Iterator<Item = Option<PlayerId>>;
+
+    fn reset(&mut self);
+
+    fn with_positions(
+        x_positions: impl IntoIterator<Item = BoardIdx>,
+        o_positions: impl IntoIterator<Item = BoardIdx>,
+    ) -> Result<Self, SetError> {
+        let mut board = Self::default();
+        for x_pos in x_positions {
+            board.set(x_pos, PlayerId::X)?;
+        }
+        for o_pos in o_positions {
+            board.set(o_pos, PlayerId::O)?;
+        }
+        Ok(board)
+    }
 
     fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cc = |i: u8| match self.get_unchecked(i) {

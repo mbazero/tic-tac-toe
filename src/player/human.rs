@@ -8,22 +8,16 @@ use std::{
 
 use crate::{
     board::{Board, BoardIdx},
-    player::{MoveStrategy, PlayerId},
+    game::GameStateRef,
+    player::MoveStrategy,
 };
 
+#[derive(Default)]
 pub struct HumanMoveStrategy {
-    player: PlayerId,
     cli_reader: CliReader,
 }
 
 impl HumanMoveStrategy {
-    pub fn new(player: PlayerId) -> Self {
-        Self {
-            player,
-            cli_reader: CliReader::default(),
-        }
-    }
-
     fn get_move_checked(&mut self, board: &impl Board) -> Result<BoardIdx> {
         let idx = self.cli_reader.read::<Coords>()?.to_board_idx()?;
         board.check_set(idx)?;
@@ -32,9 +26,14 @@ impl HumanMoveStrategy {
 }
 
 impl MoveStrategy for HumanMoveStrategy {
-    fn get_move(&mut self, board: &impl Board) -> BoardIdx {
+    fn get_move<B: Board>(
+        &mut self,
+        GameStateRef {
+            cur_player, board, ..
+        }: GameStateRef<'_, B>,
+    ) -> BoardIdx {
         loop {
-            print!("Player {} enter your move: ", self.player);
+            print!("Player {} enter your move: ", cur_player);
             match self.get_move_checked(board) {
                 Ok(idx) => return idx,
                 Err(err) => {

@@ -2,16 +2,17 @@ use rand::{rngs::ThreadRng, seq::IndexedRandom};
 
 use crate::{
     board::{Board, BoardIdx},
+    game::GameStateRef,
     player::MoveStrategy,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RandomMoveStrategy {
     rng: ThreadRng,
 }
 
 impl MoveStrategy for RandomMoveStrategy {
-    fn get_move(&mut self, board: &impl Board) -> BoardIdx {
+    fn get_move<B: Board>(&mut self, GameStateRef { board, .. }: GameStateRef<'_, B>) -> BoardIdx {
         let open_squares: Vec<_> = (0u8..)
             .zip(board.iter())
             .filter_map(|(i, x)| x.is_none().then_some(i))
