@@ -1,7 +1,7 @@
 use std::cell::UnsafeCell;
 
 use enum_map::EnumMap;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 use crate::{
     board::{Board, BoardIdx, bitset::BitsetBoard},
@@ -13,6 +13,7 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Params {
     pub update: UpdateParams,
     pub training: TrainingParams,
@@ -20,68 +21,163 @@ pub struct Params {
     pub rng_seed: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct UpdateParams {
     pub discount_factor: f64, // gamma
     pub learning_rate: f64,   // alpha
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrainingParams {
     pub num_episodes: u64,
     pub max_steps_per_episode: u64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExploreParams {
-    FixedEpsilon {
-        epsilon: f64,
-    },
+    FixedEpsilon(f64),
     EpsilonDecay {
-        epsilon_start: f64,
-        epsilon_end: f64,
-        decay_steps: u64,
+        e_start: f64,
+        e_min: f64,
+        decay_frac: f64,
     },
 }
 
-impl ExploreParams {
-    fn get_epsilon(&self, episode: u64) -> f64 {
-        match *self {
-            ExploreParams::FixedEpsilon { epsilon } => epsilon,
+pub enum EpsilonProvider {
+    Fixed(f64),
+    ExponentialDecay {
+        e_start: f64,
+        e_min: f64,
+        k: f64,
+        t_floor: u64,
+    },
+}
+
+impl EpsilonProvider {
+    pub fn new(n: u64, params: ExploreParams) -> Self {
+        match params {
+            ExploreParams::FixedEpsilon(e) => Self::Fixed(e),
             ExploreParams::EpsilonDecay {
-                epsilon_start,
-                epsilon_end,
-                decay_steps,
-            } => f64::max(
-                epsilon_end,
-                epsilon_start - (epsilon_start - epsilon_end) * episode as f64 / decay_steps as f64,
-            ),
+                e_start,
+                e_min,
+                decay_frac,
+            } => {
+                assert!(e_start > e_min && e_min > 0.0 && (0.0..=1.0).contains(&decay_frac));
+                let t_floor = (decay_frac * n as f64).ceil().max(1.0);
+                let k = -(e_min / e_start).ln() / t_floor;
+                Self::ExponentialDecay {
+                    e_start,
+                    e_min,
+                    k,
+                    t_floor: t_floor as u64,
+                }
+            }
         }
+    }
+
+    pub fn epsilon(&self, episode: u64) -> f64 {
+        match *self {
+            EpsilonProvider::Fixed(e) => e,
+            EpsilonProvider::ExponentialDecay {
+                e_start,
+                e_min,
+                k,
+                t_floor,
+            } => {
+                if episode >= t_floor {
+                    e_min
+                } else {
+                    e_start * (-k * episode as f64).exp()
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "plotting")]
+    pub fn plot(&self, n: u64, path: &impl AsRef<std::path::Path>) -> anyhow::Result<()> {
+        use plotters::{
+            chart::ChartBuilder,
+            prelude::{BitMapBackend, IntoDrawingArea},
+            series::LineSeries,
+            style::{BLUE, WHITE},
+        };
+
+        let root = BitMapBackend::new(path, (1024, 768)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let eps: Vec<(u64, f64)> = (0..=n).map(|t| (t, self.epsilon(t))).collect();
+
+        let y_min = 0.0;
+        let y_max = eps
+            .iter()
+            .map(|(_, e)| *e)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption("Epsilon Decay", ("sans-serif", 30))
+            .margin(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(0u64..n, y_min..y_max)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("Episode")
+            .y_desc("Epsilon")
+            .draw()?;
+        chart.draw_series(LineSeries::new(eps, &BLUE))?;
+        root.present()?;
+        Ok(())
     }
 }
 
 struct EpsilonGreedyMoveStrategy {
-    rng: StdRng,
+    rng: SmallRng,
     epsilon: f64,
-    explore_params: ExploreParams,
+    epsilon_frozen: Option<f64>,
+    epsilon_provider: EpsilonProvider,
     q_table_strat: QTableMoveStrategy,
     random_strat: RandomMoveStrategy,
 }
 
 impl EpsilonGreedyMoveStrategy {
-    fn new(params: ExploreParams, rng_seed: Option<u64>) -> Self {
+    fn new(epsilon_provider: EpsilonProvider, rng_seed: Option<u64>) -> Self {
+        let mut rng = rng_seed
+            .map(SmallRng::seed_from_u64)
+            .unwrap_or_else(SmallRng::from_os_rng);
+        let exploration_seed = rng.random::<u64>();
+
         Self {
-            rng: rng_seed
-                .map(StdRng::seed_from_u64)
-                .unwrap_or_else(StdRng::from_os_rng),
-            epsilon: params.get_epsilon(0),
-            explore_params: params,
+            rng,
+            epsilon: epsilon_provider.epsilon(0),
+            epsilon_frozen: None,
+            epsilon_provider,
             q_table_strat: QTableMoveStrategy {
                 ..Default::default()
             },
-            random_strat: RandomMoveStrategy::default(),
+            random_strat: RandomMoveStrategy::from_seed(exploration_seed),
         }
     }
 
     fn set_episode(&mut self, episode: u64) {
-        self.epsilon = self.explore_params.get_epsilon(episode);
+        self.epsilon = self.epsilon_provider.epsilon(episode);
+    }
+
+    fn freeze(&mut self) {
+        assert!(
+            self.epsilon_frozen.is_none(),
+            "exploration is already frozen"
+        );
+        self.epsilon_frozen = Some(self.epsilon);
+        self.epsilon = 0.0;
+    }
+
+    fn unfreeze(&mut self) {
+        assert!(
+            self.epsilon == 0.0 && self.epsilon_frozen.is_some(),
+            "exploration is not frozen"
+        );
+        self.epsilon = self.epsilon_frozen.take().unwrap();
     }
 }
 
@@ -143,15 +239,22 @@ impl UpdateFunction {
 }
 
 pub fn train(params: Params) -> (QTable, EvalStats) {
+    let Params {
+        update,
+        training,
+        explore,
+        rng_seed,
+    } = params;
+
     // TODO: Only wrap QTable in unsafe cell
     let mut move_strat = UnsafeCell::new(EpsilonGreedyMoveStrategy::new(
-        params.explore,
-        params.rng_seed,
+        EpsilonProvider::new(training.num_episodes, explore),
+        rng_seed,
     ));
-    let update_fn = UpdateFunction::new(params.update);
+    let update_fn = UpdateFunction::new(update);
     let mut eval_stats = EvalStats::default();
 
-    for i in 0..params.training.num_episodes {
+    for i in 0..training.num_episodes {
         // HACK: Set e-greedy episode to properly compute epsilon
         // The better approach is to re-construct e-greedy strat for each episode, but we can't do
         // that until we refactor things to only wrap underlying QTable in unsafe cell per the TODO
@@ -222,7 +325,7 @@ pub fn train(params: Params) -> (QTable, EvalStats) {
         );
 
         if (i + 1) % 1000 == 0 {
-            eval_stats = eval(500, &move_strat);
+            eval_stats = eval(500, &mut move_strat);
             println!("Episode {} win rate: {}", i + 1, eval_stats.win_rate());
         }
     }
@@ -255,18 +358,15 @@ impl EvalStats {
     }
 }
 
-fn eval(num_games: usize, move_strat: &UnsafeCell<EpsilonGreedyMoveStrategy>) -> EvalStats {
-    let old_epsilon = unsafe {
-        let move_strat = &mut *move_strat.get();
-        std::mem::replace(&mut move_strat.epsilon, 0.0)
-    };
+fn eval(num_games: usize, e_greedy_strat: &mut UnsafeCell<EpsilonGreedyMoveStrategy>) -> EvalStats {
+    const EVAL_RANDOM_SEED: u64 = 0xC0FF_EE00_42AA_F00D;
 
-    let stats = (0..num_games).fold(EvalStats::default(), |mut stats, _| {
-        let mut game = Game::new(
-            BitsetBoard::default(),
-            move_strat,
-            RandomMoveStrategy::default(),
-        );
+    e_greedy_strat.get_mut().freeze();
+
+    let stats = (0..num_games).fold(EvalStats::default(), |mut stats, game_idx| {
+        let random_strat =
+            RandomMoveStrategy::from_seed(EVAL_RANDOM_SEED.wrapping_add(game_idx as u64));
+        let mut game = Game::new(BitsetBoard::default(), &*e_greedy_strat, random_strat);
 
         while !game.status.is_finished() {
             game.advance();
@@ -284,9 +384,7 @@ fn eval(num_games: usize, move_strat: &UnsafeCell<EpsilonGreedyMoveStrategy>) ->
         stats
     });
 
-    unsafe {
-        (&mut *move_strat.get()).epsilon = old_epsilon;
-    }
+    e_greedy_strat.get_mut().unfreeze();
 
     stats
 }
@@ -295,9 +393,9 @@ fn eval(num_games: usize, move_strat: &UnsafeCell<EpsilonGreedyMoveStrategy>) ->
 mod tests {
     use anyhow::Result;
 
-    use crate::player::q_table::train::{Params, train};
+    use crate::player::q_table::train::{EpsilonProvider, ExploreParams, Params, train};
 
-    use super::{ExploreParams, TrainingParams, UpdateParams};
+    use super::{TrainingParams, UpdateParams};
 
     #[test]
     fn test_train() -> Result<()> {
@@ -311,13 +409,53 @@ mod tests {
                 max_steps_per_episode: 9,
             },
             explore: ExploreParams::EpsilonDecay {
-                epsilon_start: 1.0,
-                epsilon_end: 0.1,
-                decay_steps: 8_000,
+                e_start: 1.0,
+                e_min: 0.05,
+                decay_frac: 0.8,
             },
             rng_seed: Some(42),
         };
         let _ = train(params);
         Ok(())
+    }
+
+    #[test]
+    fn test_epsilon_provider() {
+        let n = 1_000;
+        let e_start = 1.0;
+        let e_min = 0.1;
+        let decay_frac = 0.5;
+
+        let exp = EpsilonProvider::new(
+            n,
+            ExploreParams::EpsilonDecay {
+                e_start,
+                e_min,
+                decay_frac,
+            },
+        );
+
+        // At t = 0 ~ e_start
+        assert_eq!(exp.epsilon(0), e_start);
+
+        // Monotone decreasing before floor
+        let e100 = exp.epsilon(100);
+        let e200 = exp.epsilon(200);
+        let e400 = exp.epsilon(400);
+        assert!(
+            e100 > e200 && e200 > e400,
+            "not strictly decreasing: {e100} {e200} {e400}"
+        );
+
+        // Just before t_floor still above e_min
+        let e499 = exp.epsilon(499);
+        assert!(
+            e499 > e_min,
+            "should be above e_min before floor, got {e499}"
+        );
+
+        // At and after t_floor -> clamped to e_min (exact)
+        assert_eq!(exp.epsilon(500), e_min);
+        assert_eq!(exp.epsilon(600), e_min);
     }
 }

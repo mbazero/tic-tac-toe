@@ -1,4 +1,4 @@
-use rand::{rngs::ThreadRng, seq::IndexedRandom};
+use rand::{SeedableRng, rngs::SmallRng, seq::IndexedRandom};
 
 use crate::{
     board::{Board, BoardIdx},
@@ -6,9 +6,25 @@ use crate::{
     player::MoveStrategy,
 };
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct RandomMoveStrategy {
-    rng: ThreadRng,
+    rng: SmallRng,
+}
+
+impl Default for RandomMoveStrategy {
+    fn default() -> Self {
+        Self {
+            rng: SmallRng::from_os_rng(),
+        }
+    }
+}
+
+impl RandomMoveStrategy {
+    pub fn from_seed(seed: u64) -> Self {
+        Self {
+            rng: SmallRng::seed_from_u64(seed),
+        }
+    }
 }
 
 impl MoveStrategy for RandomMoveStrategy {

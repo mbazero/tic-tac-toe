@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 default-run = "tic-tac-toe"
 
+[features]
+plotting = ["plotters"]
+
 [dependencies]
 anyhow = "1.0.99"
 bytemuck = "1.23.2"
@@ -16,6 +19,14 @@ regex = "1.11.2"
 smallvec = "1.15.1"
 strum = { version = "0.27.2", features = ["derive"] }
 thiserror = "2.0.16"
+plotters = { version = "0.3.7", optional = true }
+tempfile = "3.23.0"
 
 [dev-dependencies]
+approx = "0.5.1"
 rstest = "0.19"
+
+[[bin]]
+name = "plot-epsilon"
+required-features = ["plotting"]
+path = "src/bin/plot_epsilon.rs"

@@ -15,9 +15,9 @@ fn main() -> Result<()> {
             max_steps_per_episode: 9,
         },
         explore: ExploreParams::EpsilonDecay {
-            epsilon_start: 1.0,
-            epsilon_end: 0.1,
-            decay_steps: 80_000,
+            e_start: 1.0,
+            e_min: 0.05,
+            decay_frac: 0.8,
         },
         rng_seed: Some(42),
     };
