@@ -10,6 +10,7 @@ use tic_tac_toe::{
         human::HumanMoveStrategy,
         q_table::{QTable, QTableMoveStrategy},
         random::RandomMoveStrategy,
+        suboptimal::SuboptimalMoveStrategy,
     },
 };
 
@@ -22,6 +23,8 @@ enum MoveStrategyArg {
     Random,
     #[strum(serialize = "qtable", serialize = "q")]
     QTable,
+    #[strum(serialize = "suboptimal", serialize = "s")]
+    Suboptimal,
 }
 
 impl MoveStrategyArg {
@@ -33,6 +36,7 @@ impl MoveStrategyArg {
                 let q_table = QTable::read_from_file(QTable::DEFAULT_FILE_PATH)?;
                 Ok(QTableMoveStrategy::new(q_table).into())
             }
+            MoveStrategyArg::Suboptimal => Ok(SuboptimalMoveStrategy::default().into()),
         }
     }
 }

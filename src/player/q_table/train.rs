@@ -10,6 +10,7 @@ use crate::{
         MoveStrategy, PlayerId,
         q_table::{Action, QTable, QTableMoveStrategy, Reward, State, StateAction},
         random::RandomMoveStrategy,
+        suboptimal::SuboptimalMoveStrategy,
     },
 };
 
@@ -238,7 +239,7 @@ impl UpdateFunction {
     }
 }
 
-pub fn train(params: Params) -> (QTable, EvalStats) {
+pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
     let Params {
         update,
         training,
@@ -252,7 +253,7 @@ pub fn train(params: Params) -> (QTable, EvalStats) {
         rng_seed,
     ));
     let update_fn = UpdateFunction::new(update);
-    let mut eval_stats = EvalStats::default();
+    let mut eval_stats = CombinedEvalStats::default();
 
     for i in 0..training.num_episodes {
         // HACK: Set e-greedy episode to properly compute epsilon
@@ -325,12 +326,24 @@ pub fn train(params: Params) -> (QTable, EvalStats) {
         );
 
         if (i + 1) % 1000 == 0 {
-            eval_stats = eval(500, &mut move_strat);
-            println!("Episode {} win rate: {}", i + 1, eval_stats.win_rate());
+            eval_stats.random = eval_as_x(500, &mut move_strat, random_opponent);
+            eval_stats.suboptimal = eval_as_x(500, &mut move_strat, suboptimal_opponent);
+            println!(
+                "Episode {:6.0} win rate: {:.2} | {:.2}",
+                i + 1,
+                eval_stats.random.win_rate(),
+                eval_stats.suboptimal.win_rate(),
+            );
         }
     }
 
     (move_strat.into_inner().q_table_strat.q_table, eval_stats)
+}
+
+#[derive(Default, Clone, Eq, PartialEq)]
+pub struct CombinedEvalStats {
+    random: EvalStats,
+    suboptimal: EvalStats,
 }
 
 #[derive(Default, Clone, Eq, PartialEq)]
@@ -358,15 +371,19 @@ impl EvalStats {
     }
 }
 
-fn eval(num_games: usize, e_greedy_strat: &mut UnsafeCell<EpsilonGreedyMoveStrategy>) -> EvalStats {
-    const EVAL_RANDOM_SEED: u64 = 0xC0FF_EE00_42AA_F00D;
-
+fn eval_as_x<M: MoveStrategy>(
+    num_games: usize,
+    e_greedy_strat: &mut UnsafeCell<EpsilonGreedyMoveStrategy>,
+    opponent_supplier: fn(usize) -> M,
+) -> EvalStats {
     e_greedy_strat.get_mut().freeze();
 
     let stats = (0..num_games).fold(EvalStats::default(), |mut stats, game_idx| {
-        let random_strat =
-            RandomMoveStrategy::from_seed(EVAL_RANDOM_SEED.wrapping_add(game_idx as u64));
-        let mut game = Game::new(BitsetBoard::default(), &*e_greedy_strat, random_strat);
+        let mut game = Game::new(
+            BitsetBoard::default(),
+            &*e_greedy_strat,
+            opponent_supplier(game_idx),
+        );
 
         while !game.status.is_finished() {
             game.advance();
@@ -389,11 +406,22 @@ fn eval(num_games: usize, e_greedy_strat: &mut UnsafeCell<EpsilonGreedyMoveStrat
     stats
 }
 
+fn random_opponent(game_idx: usize) -> RandomMoveStrategy {
+    const EVAL_RANDOM_SEED: u64 = 0xC0FF_EE00_42AA_F00D;
+    RandomMoveStrategy::from_seed(EVAL_RANDOM_SEED.wrapping_add(game_idx as u64))
+}
+
+fn suboptimal_opponent(game_idx: usize) -> SuboptimalMoveStrategy {
+    SuboptimalMoveStrategy::new(random_opponent(game_idx))
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
 
-    use crate::player::q_table::train::{EpsilonProvider, ExploreParams, Params, train};
+    use crate::player::q_table::train::{
+        CombinedEvalStats, EpsilonProvider, ExploreParams, Params, train,
+    };
 
     use super::{TrainingParams, UpdateParams};
 
@@ -415,7 +443,12 @@ mod tests {
             },
             rng_seed: Some(42),
         };
-        let _ = train(params);
+        let (_, CombinedEvalStats { suboptimal, .. }) = train(params);
+        assert_eq!(
+            1.0,
+            suboptimal.win_rate(),
+            "agent should have 100% win rate against suboptimal strategy when playing as X"
+        );
         Ok(())
     }
 

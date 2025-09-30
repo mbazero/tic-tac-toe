@@ -8,7 +8,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct RandomMoveStrategy {
-    rng: SmallRng,
+    pub rng: SmallRng,
 }
 
 impl Default for RandomMoveStrategy {
@@ -29,10 +29,6 @@ impl RandomMoveStrategy {
 
 impl MoveStrategy for RandomMoveStrategy {
     fn get_move<B: Board>(&mut self, GameStateRef { board, .. }: GameStateRef<'_, B>) -> BoardIdx {
-        let open_squares: Vec<_> = (0u8..)
-            .zip(board.iter())
-            .filter_map(|(i, x)| x.is_none().then_some(i))
-            .collect();
-        *open_squares.choose(&mut self.rng).unwrap()
+        *board.available().choose(&mut self.rng).unwrap()
     }
 }

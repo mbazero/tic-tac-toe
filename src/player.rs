@@ -5,12 +5,16 @@ use strum::Display;
 use crate::{
     board::{Board, BoardIdx},
     game::GameStateRef,
-    player::{human::HumanMoveStrategy, q_table::QTableMoveStrategy, random::RandomMoveStrategy},
+    player::{
+        human::HumanMoveStrategy, q_table::QTableMoveStrategy, random::RandomMoveStrategy,
+        suboptimal::SuboptimalMoveStrategy,
+    },
 };
 
 pub mod human;
 pub mod q_table;
 pub mod random;
+pub mod suboptimal;
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Display, Hash, Enum)]
 pub enum PlayerId {
@@ -33,6 +37,7 @@ pub enum MoveStrategyEnum {
     HumanMoveStrategy,
     RandomMoveStrategy,
     QTableMoveStrategy,
+    SuboptimalMoveStrategy,
 }
 
 #[enum_dispatch(MoveStrategyEnum)]

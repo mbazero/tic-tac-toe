@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::player::PlayerId;
@@ -8,6 +9,7 @@ pub mod array;
 pub mod bitset;
 
 pub type BoardIdx = u8;
+pub type BoardVec = SmallVec<[BoardIdx; 9]>;
 
 #[derive(Error, Debug, Copy, Clone)]
 pub enum SetError {
@@ -59,6 +61,16 @@ pub trait Board: Default + Display {
     fn is_winner(&self, player: PlayerId) -> bool;
 
     fn iter(&self) -> impl Iterator<Item = Option<PlayerId>>;
+
+    fn iter_available(&self) -> impl Iterator<Item = BoardIdx> {
+        (0u8..)
+            .zip(self.iter())
+            .filter_map(|(i, cell)| cell.is_none().then_some(i))
+    }
+
+    fn available(&self) -> BoardVec {
+        self.iter_available().collect()
+    }
 
     fn reset(&mut self);
 
