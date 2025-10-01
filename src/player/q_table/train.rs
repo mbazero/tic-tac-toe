@@ -142,21 +142,17 @@ struct EpsilonGreedyMoveStrategy {
 }
 
 impl EpsilonGreedyMoveStrategy {
-    fn new(epsilon_provider: EpsilonProvider, rng_seed: Option<u64>) -> Self {
-        let mut rng = rng_seed
-            .map(SmallRng::seed_from_u64)
-            .unwrap_or_else(SmallRng::from_os_rng);
-        let exploration_seed = rng.random::<u64>();
-
+    fn new(epsilon_provider: EpsilonProvider, rng: SmallRng) -> Self {
         Self {
-            rng,
+            rng: rng.clone(),
             epsilon: epsilon_provider.epsilon(0),
             epsilon_frozen: None,
             epsilon_provider,
             q_table_strat: QTableMoveStrategy {
-                ..Default::default()
+                rng: rng.clone(),
+                q_table: Default::default(),
             },
-            random_strat: RandomMoveStrategy::from_seed(exploration_seed),
+            random_strat: RandomMoveStrategy::new(rng),
         }
     }
 
@@ -199,38 +195,38 @@ impl MoveStrategy for &UnsafeCell<EpsilonGreedyMoveStrategy> {
 }
 
 struct UpdateFunction {
+    rng: SmallRng,
     discount_factor: f64,
     learning_rate: f64,
 }
 
 impl UpdateFunction {
-    fn new(params: UpdateParams) -> Self {
+    fn new(params: UpdateParams, rng: SmallRng) -> Self {
         Self {
             discount_factor: params.discount_factor,
             learning_rate: params.learning_rate,
+            rng,
         }
     }
 
     fn apply_update(
-        &self,
+        &mut self,
         state_action: StateAction,
         reward: Reward,
         next_state: Option<State>,
         q_table: &mut QTable,
     ) {
         let max_next_q_value = match next_state {
-            Some(next_state) => {
-                match q_table.action_max(next_state, Action::iter_available(&next_state.1)) {
-                    Some((_, q_value)) => q_value.0,
-                    None => panic!(
-                        "failed to find next action\nplayer: {:?}\nprev_board:\n{}\naction: {}\nnext_board:\n{}",
-                        state_action.player_id(),
-                        state_action.board(),
-                        state_action.action().0,
-                        next_state.1,
-                    ),
-                }
-            }
+            Some(next_state) => match q_table.max_actions(next_state, &mut self.rng) {
+                Some((_, q_value)) => q_value.0,
+                None => panic!(
+                    "failed to find next action\nplayer: {:?}\nprev_board:\n{}\naction: {}\nnext_board:\n{}",
+                    state_action.player_id(),
+                    state_action.board(),
+                    state_action.action().0,
+                    next_state.1,
+                ),
+            },
             None => 0.0,
         };
         let cur_q_value = *q_table[state_action];
@@ -247,12 +243,16 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
         rng_seed,
     } = params;
 
+    let mut rng = rng_seed
+        .map(SmallRng::seed_from_u64)
+        .unwrap_or_else(SmallRng::from_os_rng);
+
     // TODO: Only wrap QTable in unsafe cell
     let mut move_strat = UnsafeCell::new(EpsilonGreedyMoveStrategy::new(
         EpsilonProvider::new(training.num_episodes, explore),
-        rng_seed,
+        rng.clone(),
     ));
-    let update_fn = UpdateFunction::new(update);
+    let mut update_fn = UpdateFunction::new(update, rng);
     let mut eval_stats = CombinedEvalStats::default();
 
     for i in 0..training.num_episodes {
@@ -265,20 +265,21 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
         let mut game = Game::new(BitsetBoard::default(), &move_strat, &move_strat);
         let mut prev_sas = EnumMap::default();
 
-        let update_q_table = |player: PlayerId,
-                              state_action: StateAction,
-                              reward: f64,
-                              next_board: Option<BitsetBoard>| {
-            unsafe {
-                let q_table = &mut (&mut *move_strat.get()).q_table_strat.q_table;
-                update_fn.apply_update(
-                    state_action,
-                    reward.into(),
-                    next_board.map(|board| State(player, board)),
-                    q_table,
-                );
-            }
-        };
+        let mut update_q_table =
+            |player: PlayerId,
+             state_action: StateAction,
+             reward: f64,
+             next_board: Option<BitsetBoard>| {
+                unsafe {
+                    let q_table = &mut (&mut *move_strat.get()).q_table_strat.q_table;
+                    update_fn.apply_update(
+                        state_action,
+                        reward.into(),
+                        next_board.map(|board| State(player, board)),
+                        q_table,
+                    );
+                }
+            };
 
         while !game.status.is_finished() {
             let cur_player = game.cur_player;
@@ -326,14 +327,19 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
         );
 
         if (i + 1) % 1000 == 0 {
-            eval_stats.random = eval_as_x(500, &mut move_strat, random_opponent);
-            eval_stats.suboptimal = eval_as_x(500, &mut move_strat, suboptimal_opponent);
+            eval_stats.random = eval_as_x(1000, &mut move_strat, random_opponent);
+            eval_stats.suboptimal = eval_as_x(1000, &mut move_strat, suboptimal_opponent);
             println!(
                 "Episode {:6.0} win rate: {:.2} | {:.2}",
                 i + 1,
                 eval_stats.random.win_rate(),
                 eval_stats.suboptimal.win_rate(),
             );
+
+            if eval_stats.random.win_rate() >= 0.995 && eval_stats.suboptimal.win_rate() == 1.0 {
+                println!("Target performance achieved");
+                break;
+            }
         }
     }
 
@@ -408,7 +414,8 @@ fn eval_as_x<M: MoveStrategy>(
 
 fn random_opponent(game_idx: usize) -> RandomMoveStrategy {
     const EVAL_RANDOM_SEED: u64 = 0xC0FF_EE00_42AA_F00D;
-    RandomMoveStrategy::from_seed(EVAL_RANDOM_SEED.wrapping_add(game_idx as u64))
+    let rng = SmallRng::seed_from_u64(EVAL_RANDOM_SEED.wrapping_add(game_idx as u64));
+    RandomMoveStrategy::new(rng)
 }
 
 fn suboptimal_opponent(game_idx: usize) -> SuboptimalMoveStrategy {
@@ -418,9 +425,18 @@ fn suboptimal_opponent(game_idx: usize) -> SuboptimalMoveStrategy {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use rand::{SeedableRng, rngs::SmallRng};
 
-    use crate::player::q_table::train::{
-        CombinedEvalStats, EpsilonProvider, ExploreParams, Params, train,
+    use crate::{
+        board::bitset::BitsetBoard,
+        game::GameStateRef,
+        player::{
+            MoveStrategy, PlayerId,
+            q_table::{
+                QTableMoveStrategy,
+                train::{CombinedEvalStats, EpsilonProvider, ExploreParams, Params, train},
+            },
+        },
     };
 
     use super::{TrainingParams, UpdateParams};
@@ -441,14 +457,24 @@ mod tests {
                 e_min: 0.05,
                 decay_frac: 0.8,
             },
-            rng_seed: Some(42),
+            rng_seed: None,
         };
-        let (_, CombinedEvalStats { suboptimal, .. }) = train(params);
+
+        let (q_table, CombinedEvalStats { suboptimal, .. }) = train(params);
+
         assert_eq!(
             1.0,
             suboptimal.win_rate(),
             "agent should have 100% win rate against suboptimal strategy when playing as X"
         );
+
+        let mut q_table_strat = QTableMoveStrategy::new(q_table, SmallRng::from_os_rng());
+        let first_move = q_table_strat.get_move(GameStateRef {
+            cur_player: PlayerId::X,
+            board: &BitsetBoard::default(),
+            turns: &[],
+        });
+        assert_eq!(4, first_move, "first move should always be the center cell");
         Ok(())
     }
 

@@ -1,5 +1,9 @@
 use anyhow::Result;
 use anyhow::anyhow;
+use rand::RngCore;
+use rand::rngs::SmallRng;
+use rand::seq::IndexedRandom;
+use smallvec::SmallVec;
 use std::hash::Hash;
 use std::ops::Index;
 use std::ops::IndexMut;
@@ -38,14 +42,14 @@ impl AsBitsetBoard for BitsetBoard {
     }
 }
 
-#[derive(Default)]
 pub struct QTableMoveStrategy {
+    rng: SmallRng,
     q_table: QTable,
 }
 
 impl QTableMoveStrategy {
-    pub fn new(q_table: QTable) -> Self {
-        Self { q_table }
+    pub fn new(q_table: QTable, rng: SmallRng) -> Self {
+        Self { q_table, rng }
     }
 }
 
@@ -57,11 +61,11 @@ impl MoveStrategy for QTableMoveStrategy {
         }: GameStateRef<'_, B>,
     ) -> BoardIdx {
         let state = State(cur_player, board.as_bitset_board());
-        let (action, _) = self
-            .q_table
-            .action_max(state, Action::iter_available(board))
-            .expect("no action found");
-        action.0
+        self.q_table
+            .max_actions(state, &mut self.rng)
+            .expect("no max action found")
+            .0
+            .0
     }
 }
 
@@ -77,17 +81,6 @@ pub struct Action(BoardIdx);
 
 impl Action {
     const CARDINALITY: usize = 9;
-
-    pub fn iter() -> impl Iterator<Item = Action> {
-        (0..9).map(Action)
-    }
-
-    pub fn iter_available(board: &impl Board) -> impl Iterator<Item = Action> {
-        board
-            .iter()
-            .zip(0..9)
-            .filter_map(|(opt, i)| opt.is_none().then_some(Action(i)))
-    }
 }
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -149,15 +142,24 @@ pub struct QTable(Box<[QValue; StateAction::CARDINALITY]>);
 impl QTable {
     pub const DEFAULT_FILE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/artifacts/q_table");
 
-    pub fn action_max(
-        &self,
-        state: State,
-        actions: impl IntoIterator<Item = Action>,
-    ) -> Option<(Action, QValue)> {
-        actions
+    pub fn max_actions(&self, state: State, rng: &mut impl RngCore) -> Option<(Action, QValue)> {
+        let qvals: SmallVec<[_; 9]> = state
+            .1
+            .iter_available()
+            .map(|i| {
+                let action = Action(i);
+                (action, self[StateAction::new(state, action)])
+            })
+            .collect();
+
+        let max_qval = qvals.iter().map(|(_, qval)| *qval).max()?;
+
+        let max_actions: SmallVec<[_; 9]> = qvals
             .into_iter()
-            .map(|action| (action, self[StateAction::new(state, action)]))
-            .max_by_key(|(_, reward)| *reward)
+            .filter(|(_, qval)| *qval == max_qval)
+            .collect();
+
+        max_actions.choose(rng).copied()
     }
 
     pub fn write_to_file(&self, path: impl AsRef<Path>) -> Result<()> {

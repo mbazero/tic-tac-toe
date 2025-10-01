@@ -19,7 +19,7 @@ fn main() -> Result<()> {
             e_min: 0.05,
             decay_frac: 0.8,
         },
-        rng_seed: Some(42),
+        rng_seed: None,
     };
 
     let (q_table, _) = train(params);
