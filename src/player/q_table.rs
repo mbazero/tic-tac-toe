@@ -57,11 +57,11 @@ impl MoveStrategy for QTableMoveStrategy {
         }: GameStateRef<'_, B>,
     ) -> BoardIdx {
         let state = State(cur_player, board.as_bitset_board());
-        let (action, _) = self
-            .q_table
-            .action_max(state, Action::iter_available(board))
-            .expect("no action found");
-        action.0
+        self.q_table
+            .max_action(state)
+            .expect("no max action found")
+            .0
+            .0
     }
 }
 
@@ -77,17 +77,6 @@ pub struct Action(BoardIdx);
 
 impl Action {
     const CARDINALITY: usize = 9;
-
-    pub fn iter() -> impl Iterator<Item = Action> {
-        (0..9).map(Action)
-    }
-
-    pub fn iter_available(board: &impl Board) -> impl Iterator<Item = Action> {
-        board
-            .iter()
-            .zip(0..9)
-            .filter_map(|(opt, i)| opt.is_none().then_some(Action(i)))
-    }
 }
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -149,15 +138,23 @@ pub struct QTable(Box<[QValue; StateAction::CARDINALITY]>);
 impl QTable {
     pub const DEFAULT_FILE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/artifacts/q_table");
 
-    pub fn action_max(
-        &self,
-        state: State,
-        actions: impl IntoIterator<Item = Action>,
-    ) -> Option<(Action, QValue)> {
-        actions
-            .into_iter()
-            .map(|action| (action, self[StateAction::new(state, action)]))
-            .max_by_key(|(_, reward)| *reward)
+    pub fn max_action(&self, state: State) -> Option<(Action, QValue)> {
+        fn action_rank(Action(i): Action) -> u8 {
+            match i {
+                4 => 2,             // center
+                0 | 2 | 6 | 8 => 1, // corners
+                _ => 0,
+            }
+        }
+
+        state
+            .1
+            .iter_available()
+            .map(|i| (Action(i), self[StateAction::new(state, Action(i))]))
+            .max_by(|(a1, q1), (a2, q2)| {
+                q1.cmp(q2)
+                    .then_with(|| action_rank(*a1).cmp(&action_rank(*a2)))
+            })
     }
 
     pub fn write_to_file(&self, path: impl AsRef<Path>) -> Result<()> {

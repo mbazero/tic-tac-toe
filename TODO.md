@@ -4,8 +4,8 @@
 - [x] Local evaluation loop
 - [x] Training function as a binary
 
-- [ ] Implement learning rate decay
-
+- [ ] Learning rate decay
+- [ ] Immediate negative reward for next player state
 
 - [ ] Accept params as arg
 - [ ] Set seed properly for reproducible runs and update test
