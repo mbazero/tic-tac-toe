@@ -82,6 +82,7 @@ impl Action {
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 struct StateAction(usize);
 
+#[allow(dead_code)]
 impl StateAction {
     const CARDINALITY: usize = State::CARDINALITY * Action::CARDINALITY;
     const ACTION_OFFSET: usize = 19;
@@ -137,6 +138,14 @@ pub struct QTable(Box<[QValue; StateAction::CARDINALITY]>);
 
 impl QTable {
     pub const DEFAULT_FILE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/artifacts/q_table");
+
+    pub fn max_q(&self, state: State) -> Option<QValue> {
+        state
+            .1
+            .iter_available()
+            .map(|i| self[StateAction::new(state, Action(i))])
+            .max()
+    }
 
     pub fn max_action(&self, state: State) -> Option<(Action, QValue)> {
         fn action_rank(Action(i): Action) -> u8 {

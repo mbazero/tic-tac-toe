@@ -1,6 +1,5 @@
 use std::cell::UnsafeCell;
 
-use enum_map::EnumMap;
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 use crate::{
@@ -308,7 +307,7 @@ impl MoveStrategy for &UnsafeCell<EpsilonGreedyMoveStrategy> {
 struct UpdateFunction {
     discount_factor: f64,
     lr_provider: LearningRateProvider,
-    current_learning_rate: f64,
+    learning_rate: f64,
 }
 
 impl UpdateFunction {
@@ -318,12 +317,12 @@ impl UpdateFunction {
         Self {
             discount_factor: params.discount_factor,
             lr_provider,
-            current_learning_rate,
+            learning_rate: current_learning_rate,
         }
     }
 
     fn set_episode(&mut self, episode: u64) {
-        self.current_learning_rate = self.lr_provider.learning_rate(episode);
+        self.learning_rate = self.lr_provider.learning_rate(episode);
     }
 
     fn apply_update(
@@ -334,21 +333,15 @@ impl UpdateFunction {
         q_table: &mut QTable,
     ) {
         let max_next_q_value = match next_state {
-            Some(next_state) => match q_table.max_action(next_state) {
-                Some((_, q_value)) => q_value.0,
-                None => panic!(
-                    "failed to find next action\nplayer: {:?}\nprev_board:\n{}\naction: {}\nnext_board:\n{}",
-                    state_action.player_id(),
-                    state_action.board(),
-                    state_action.action().0,
-                    next_state.1,
-                ),
-            },
+            Some(next_state) => q_table
+                .max_q(next_state)
+                .expect("max q should exist")
+                .into_inner(),
             None => 0.0,
         };
         let cur_q_value = *q_table[state_action];
-        q_table[state_action] += self.current_learning_rate
-            * (*reward + self.discount_factor * max_next_q_value - cur_q_value);
+        q_table[state_action] +=
+            self.learning_rate * (*reward + self.discount_factor * -max_next_q_value - cur_q_value);
     }
 }
 
@@ -377,26 +370,14 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
         update_fn.set_episode(i);
 
         let mut game = Game::new(BitsetBoard::default(), &move_strat, &move_strat);
-        let mut prev_sas = EnumMap::default();
 
-        let update_q_table = |player: PlayerId,
-                              state_action: StateAction,
-                              reward: f64,
-                              next_board: Option<BitsetBoard>| {
-            unsafe {
-                let q_table = &mut (&mut *move_strat.get()).q_table_strat.q_table;
-                update_fn.apply_update(
-                    state_action,
-                    reward.into(),
-                    next_board.map(|board| State(player, board)),
-                    q_table,
-                );
-            }
+        let update_q_table = |state_action: StateAction, reward: f64, next_state: Option<State>| unsafe {
+            let q_table = &mut (&mut *move_strat.get()).q_table_strat.q_table;
+            update_fn.apply_update(state_action, reward.into(), next_state, q_table);
         };
 
         while !game.status.is_finished() {
             let cur_player = game.cur_player;
-            let prev_player = game.turns.last().copied().map(|(player, _)| player);
 
             // Extract current player state
             let cur_state = State(cur_player, game.board);
@@ -406,38 +387,16 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
 
             // Extract current player action
             let cur_action = Action(game.turns.last().copied().unwrap().1);
+            let state_action = StateAction::new(cur_state, cur_action);
 
-            // Save current player state-action
-            prev_sas[cur_player] = Some(StateAction::new(cur_state, cur_action));
+            let (reward, next_state) = match game.status {
+                GameStatus::Won => (1.0, None),
+                GameStatus::Tied => (0.0, None),
+                GameStatus::Ongoing => (0.0, Some(State(cur_player.other(), game.board))),
+            };
 
-            // Compute reward and update q-table for previous player
-            if let Some(prev_player) = prev_player {
-                let (reward, next_board) = match game.status {
-                    GameStatus::Ongoing => (0.0, Some(game.board)),
-                    GameStatus::Tied => (0.0, None),
-                    GameStatus::Won => (-1.0, None),
-                };
-
-                update_q_table(
-                    prev_player,
-                    prev_sas[prev_player].unwrap(),
-                    reward,
-                    next_board,
-                );
-            }
+            update_q_table(state_action, reward, next_state);
         }
-
-        // Apply terminal update for winning player
-        update_q_table(
-            game.cur_player,
-            prev_sas[game.cur_player].unwrap(),
-            match game.status {
-                GameStatus::Ongoing => unreachable!(),
-                GameStatus::Tied => 0.0,
-                GameStatus::Won => 1.0,
-            },
-            None,
-        );
 
         if (i + 1) % 1000 == 0 {
             eval_stats.random = eval_as_x(1000, &mut move_strat, random_opponent);
@@ -535,7 +494,7 @@ mod tests {
     use anyhow::Result;
 
     use crate::{
-        board::bitset::BitsetBoard,
+        board::{Board, bitset::BitsetBoard},
         game::GameStateRef,
         player::{
             MoveStrategy, PlayerId,
@@ -552,7 +511,6 @@ mod tests {
     use super::{LearningParams, TrainingParams, UpdateParams};
 
     #[test]
-    #[ignore]
     fn test_train() -> Result<()> {
         let params = Params {
             update: UpdateParams {
@@ -591,6 +549,17 @@ mod tests {
             turns: &[],
         });
         assert_eq!(4, first_move, "first move should be center");
+
+        let response_board = BitsetBoard::with_positions([4], [5])?;
+        let second_move = q_table_strat.get_move(GameStateRef {
+            cur_player: PlayerId::X,
+            board: &response_board,
+            turns: &[(PlayerId::X, 4), (PlayerId::O, 5)],
+        });
+        assert!(
+            matches!(second_move, 0 | 2 | 6 | 8),
+            "after taking center against a side response, agent should pick a corner, got {second_move}",
+        );
         Ok(())
     }
 

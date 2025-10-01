@@ -4,8 +4,10 @@
 - [x] Local evaluation loop
 - [x] Training function as a binary
 
-- [ ] Learning rate decay
+- [ ] Random-optimal teacher?
+- [ ] Final eval with much larger number of games
 - [ ] Immediate negative reward for next player state
+- [ ] Step penalty
 
 - [ ] Accept params as arg
 - [ ] Set seed properly for reproducible runs and update test
