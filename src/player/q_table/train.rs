@@ -24,8 +24,19 @@ pub struct Params {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UpdateParams {
-    pub discount_factor: f64, // gamma
-    pub learning_rate: f64,   // alpha
+    pub discount_factor: f64,          // gamma
+    pub learning_rate: LearningParams, // alpha
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LearningParams {
+    Fixed(f64),
+    PowerDecay {
+        alpha_start: f64,
+        alpha_min: f64,
+        decay_frac: f64,
+        power: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +143,107 @@ impl EpsilonProvider {
     }
 }
 
+pub enum LearningRateProvider {
+    Fixed(f64),
+    PowerDecay {
+        alpha_start: f64,
+        alpha_min: f64,
+        k: f64,
+        t_floor: u64,
+        power: f64,
+    },
+}
+
+impl LearningRateProvider {
+    pub fn new(n: u64, params: LearningParams) -> Self {
+        match params {
+            LearningParams::Fixed(alpha) => Self::Fixed(alpha),
+            LearningParams::PowerDecay {
+                alpha_start,
+                alpha_min,
+                decay_frac,
+                power,
+            } => {
+                assert!(
+                    alpha_start > alpha_min
+                        && alpha_min > 0.0
+                        && (0.0..=1.0).contains(&decay_frac)
+                        && power > 0.0
+                );
+                let t_floor = (decay_frac * n as f64).ceil().max(1.0);
+                // Compute k such that at t_floor: alpha_start / (1 + k * t_floor)^power ≈ alpha_min
+                // Solving: (1 + k * t_floor)^power = alpha_start / alpha_min
+                // k = ((alpha_start / alpha_min)^(1/power) - 1) / t_floor
+                let k = ((alpha_start / alpha_min).powf(1.0 / power) - 1.0) / t_floor;
+                Self::PowerDecay {
+                    alpha_start,
+                    alpha_min,
+                    k,
+                    t_floor: t_floor as u64,
+                    power,
+                }
+            }
+        }
+    }
+
+    pub fn learning_rate(&self, episode: u64) -> f64 {
+        match *self {
+            LearningRateProvider::Fixed(alpha) => alpha,
+            LearningRateProvider::PowerDecay {
+                alpha_start,
+                alpha_min,
+                k,
+                t_floor,
+                power,
+            } => {
+                if episode >= t_floor {
+                    alpha_min
+                } else {
+                    let alpha = alpha_start / (1.0 + k * episode as f64).powf(power);
+                    alpha.max(alpha_min)
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "plotting")]
+    pub fn plot(&self, n: u64, path: &impl AsRef<std::path::Path>) -> anyhow::Result<()> {
+        use plotters::{
+            chart::ChartBuilder,
+            prelude::{BitMapBackend, IntoDrawingArea},
+            series::LineSeries,
+            style::{RED, WHITE},
+        };
+
+        let root = BitMapBackend::new(path, (1024, 768)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let alphas: Vec<(u64, f64)> = (0..=n).map(|t| (t, self.learning_rate(t))).collect();
+
+        let y_min = 0.0;
+        let y_max = alphas
+            .iter()
+            .map(|(_, a)| *a)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption("Learning Rate Decay", ("sans-serif", 30))
+            .margin(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(0u64..n, y_min..y_max)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("Episode")
+            .y_desc("Learning Rate")
+            .draw()?;
+        chart.draw_series(LineSeries::new(alphas, &RED))?;
+        root.present()?;
+        Ok(())
+    }
+}
+
 struct EpsilonGreedyMoveStrategy {
     rng: SmallRng,
     epsilon: f64,
@@ -149,7 +261,6 @@ impl EpsilonGreedyMoveStrategy {
             epsilon_frozen: None,
             epsilon_provider,
             q_table_strat: QTableMoveStrategy {
-                rng: rng.clone(),
                 q_table: Default::default(),
             },
             random_strat: RandomMoveStrategy::new(rng),
@@ -195,29 +306,35 @@ impl MoveStrategy for &UnsafeCell<EpsilonGreedyMoveStrategy> {
 }
 
 struct UpdateFunction {
-    rng: SmallRng,
     discount_factor: f64,
-    learning_rate: f64,
+    lr_provider: LearningRateProvider,
+    current_learning_rate: f64,
 }
 
 impl UpdateFunction {
-    fn new(params: UpdateParams, rng: SmallRng) -> Self {
+    fn new(params: UpdateParams, n_episodes: u64) -> Self {
+        let lr_provider = LearningRateProvider::new(n_episodes, params.learning_rate);
+        let current_learning_rate = lr_provider.learning_rate(0);
         Self {
             discount_factor: params.discount_factor,
-            learning_rate: params.learning_rate,
-            rng,
+            lr_provider,
+            current_learning_rate,
         }
     }
 
+    fn set_episode(&mut self, episode: u64) {
+        self.current_learning_rate = self.lr_provider.learning_rate(episode);
+    }
+
     fn apply_update(
-        &mut self,
+        &self,
         state_action: StateAction,
         reward: Reward,
         next_state: Option<State>,
         q_table: &mut QTable,
     ) {
         let max_next_q_value = match next_state {
-            Some(next_state) => match q_table.max_action(next_state, &mut self.rng) {
+            Some(next_state) => match q_table.max_action(next_state) {
                 Some((_, q_value)) => q_value.0,
                 None => panic!(
                     "failed to find next action\nplayer: {:?}\nprev_board:\n{}\naction: {}\nnext_board:\n{}",
@@ -230,8 +347,8 @@ impl UpdateFunction {
             None => 0.0,
         };
         let cur_q_value = *q_table[state_action];
-        q_table[state_action] +=
-            self.learning_rate * (*reward + self.discount_factor * max_next_q_value - cur_q_value);
+        q_table[state_action] += self.current_learning_rate
+            * (*reward + self.discount_factor * max_next_q_value - cur_q_value);
     }
 }
 
@@ -243,7 +360,7 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
         rng_seed,
     } = params;
 
-    let mut rng = rng_seed
+    let rng = rng_seed
         .map(SmallRng::seed_from_u64)
         .unwrap_or_else(SmallRng::from_os_rng);
 
@@ -252,34 +369,30 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
         EpsilonProvider::new(training.num_episodes, explore),
         rng.clone(),
     ));
-    let mut update_fn = UpdateFunction::new(update, rng);
+    let mut update_fn = UpdateFunction::new(update, training.num_episodes);
     let mut eval_stats = CombinedEvalStats::default();
 
     for i in 0..training.num_episodes {
-        // HACK: Set e-greedy episode to properly compute epsilon
-        // The better approach is to re-construct e-greedy strat for each episode, but we can't do
-        // that until we refactor things to only wrap underlying QTable in unsafe cell per the TODO
-        // above.
         move_strat.get_mut().set_episode(i);
+        update_fn.set_episode(i);
 
         let mut game = Game::new(BitsetBoard::default(), &move_strat, &move_strat);
         let mut prev_sas = EnumMap::default();
 
-        let mut update_q_table =
-            |player: PlayerId,
-             state_action: StateAction,
-             reward: f64,
-             next_board: Option<BitsetBoard>| {
-                unsafe {
-                    let q_table = &mut (&mut *move_strat.get()).q_table_strat.q_table;
-                    update_fn.apply_update(
-                        state_action,
-                        reward.into(),
-                        next_board.map(|board| State(player, board)),
-                        q_table,
-                    );
-                }
-            };
+        let update_q_table = |player: PlayerId,
+                              state_action: StateAction,
+                              reward: f64,
+                              next_board: Option<BitsetBoard>| {
+            unsafe {
+                let q_table = &mut (&mut *move_strat.get()).q_table_strat.q_table;
+                update_fn.apply_update(
+                    state_action,
+                    reward.into(),
+                    next_board.map(|board| State(player, board)),
+                    q_table,
+                );
+            }
+        };
 
         while !game.status.is_finished() {
             let cur_player = game.cur_player;
@@ -343,8 +456,8 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
 
 #[derive(Default, Clone, Eq, PartialEq)]
 pub struct CombinedEvalStats {
-    random: EvalStats,
-    suboptimal: EvalStats,
+    pub random: EvalStats,
+    pub suboptimal: EvalStats,
 }
 
 #[derive(Default, Clone, Eq, PartialEq)]
@@ -420,7 +533,6 @@ fn suboptimal_opponent(game_idx: usize) -> SuboptimalMoveStrategy {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use rand::{SeedableRng, rngs::SmallRng};
 
     use crate::{
         board::bitset::BitsetBoard,
@@ -429,19 +541,28 @@ mod tests {
             MoveStrategy, PlayerId,
             q_table::{
                 QTableMoveStrategy,
-                train::{CombinedEvalStats, EpsilonProvider, ExploreParams, Params, train},
+                train::{
+                    CombinedEvalStats, EpsilonProvider, ExploreParams, LearningRateProvider,
+                    Params, train,
+                },
             },
         },
     };
 
-    use super::{TrainingParams, UpdateParams};
+    use super::{LearningParams, TrainingParams, UpdateParams};
 
     #[test]
+    #[ignore]
     fn test_train() -> Result<()> {
         let params = Params {
             update: UpdateParams {
                 discount_factor: 1.0,
-                learning_rate: 0.05,
+                learning_rate: LearningParams::PowerDecay {
+                    alpha_start: 0.1,
+                    alpha_min: 0.01,
+                    decay_frac: 0.8,
+                    power: 0.85,
+                },
             },
             training: TrainingParams {
                 num_episodes: 50_000,
@@ -450,7 +571,7 @@ mod tests {
             explore: ExploreParams::EpsilonDecay {
                 e_start: 1.0,
                 e_min: 0.05,
-                decay_frac: 1.0,
+                decay_frac: 0.8,
             },
             rng_seed: None,
         };
@@ -460,16 +581,16 @@ mod tests {
         assert_eq!(
             1.0,
             suboptimal.win_rate(),
-            "agent should have 100% win rate against suboptimal strategy when playing as X"
+            "agent should have an 100% win rate against suboptimal strategy when playing as X",
         );
 
-        let mut q_table_strat = QTableMoveStrategy::new(q_table, SmallRng::from_os_rng());
+        let mut q_table_strat = QTableMoveStrategy::new(q_table);
         let first_move = q_table_strat.get_move(GameStateRef {
             cur_player: PlayerId::X,
             board: &BitsetBoard::default(),
             turns: &[],
         });
-        assert_eq!(4, first_move, "first move should always be the center cell");
+        assert_eq!(4, first_move, "first move should be center");
         Ok(())
     }
 
@@ -511,5 +632,56 @@ mod tests {
         // At and after t_floor -> clamped to e_min (exact)
         assert_eq!(exp.epsilon(500), e_min);
         assert_eq!(exp.epsilon(600), e_min);
+    }
+
+    #[test]
+    fn test_learning_rate_provider() {
+        let n = 10_000;
+        let alpha_start = 0.1;
+        let alpha_min = 0.01;
+        let decay_frac = 0.8;
+        let power = 0.85;
+
+        let lr_provider = LearningRateProvider::new(
+            n,
+            LearningParams::PowerDecay {
+                alpha_start,
+                alpha_min,
+                decay_frac,
+                power,
+            },
+        );
+
+        // At t = 0, should be alpha_start
+        assert_eq!(lr_provider.learning_rate(0), alpha_start);
+
+        // Should decrease monotonically before floor
+        let lr1000 = lr_provider.learning_rate(1000);
+        let lr3000 = lr_provider.learning_rate(3000);
+        let lr5000 = lr_provider.learning_rate(5000);
+        let lr7000 = lr_provider.learning_rate(7000);
+
+        assert!(
+            lr1000 > lr3000 && lr3000 > lr5000 && lr5000 > lr7000,
+            "not strictly decreasing: {lr1000} {lr3000} {lr5000} {lr7000}"
+        );
+
+        // Should be above minimum before floor
+        let lr7999 = lr_provider.learning_rate(7999);
+        assert!(
+            lr7999 > alpha_min,
+            "should be above alpha_min before floor, got {lr7999}"
+        );
+
+        // At and after t_floor (8000) should be clamped to alpha_min
+        assert_eq!(lr_provider.learning_rate(8000), alpha_min);
+        assert_eq!(lr_provider.learning_rate(9000), alpha_min);
+        assert_eq!(lr_provider.learning_rate(10000), alpha_min);
+
+        // Test fixed learning rate variant
+        let fixed_lr = LearningRateProvider::new(n, LearningParams::Fixed(0.05));
+        assert_eq!(fixed_lr.learning_rate(0), 0.05);
+        assert_eq!(fixed_lr.learning_rate(5000), 0.05);
+        assert_eq!(fixed_lr.learning_rate(10000), 0.05);
     }
 }

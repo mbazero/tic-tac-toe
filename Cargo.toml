@@ -27,6 +27,6 @@ approx = "0.5.1"
 rstest = "0.19"
 
 [[bin]]
-name = "plot-epsilon"
+name = "plot-decay"
 required-features = ["plotting"]
-path = "src/bin/plot_epsilon.rs"
+path = "src/bin/plot_decay.rs"

@@ -1,9 +1,5 @@
 use anyhow::Result;
 use anyhow::anyhow;
-use rand::RngCore;
-use rand::rngs::SmallRng;
-use rand::seq::IndexedRandom;
-use smallvec::SmallVec;
 use std::hash::Hash;
 use std::ops::Index;
 use std::ops::IndexMut;
@@ -42,14 +38,14 @@ impl AsBitsetBoard for BitsetBoard {
     }
 }
 
+#[derive(Default)]
 pub struct QTableMoveStrategy {
-    rng: SmallRng,
     q_table: QTable,
 }
 
 impl QTableMoveStrategy {
-    pub fn new(q_table: QTable, rng: SmallRng) -> Self {
-        Self { q_table, rng }
+    pub fn new(q_table: QTable) -> Self {
+        Self { q_table }
     }
 }
 
@@ -62,7 +58,7 @@ impl MoveStrategy for QTableMoveStrategy {
     ) -> BoardIdx {
         let state = State(cur_player, board.as_bitset_board());
         self.q_table
-            .max_action(state, &mut self.rng)
+            .max_action(state)
             .expect("no max action found")
             .0
             .0
@@ -142,7 +138,7 @@ pub struct QTable(Box<[QValue; StateAction::CARDINALITY]>);
 impl QTable {
     pub const DEFAULT_FILE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/artifacts/q_table");
 
-    pub fn max_action(&self, state: State, rng: &mut impl RngCore) -> Option<(Action, QValue)> {
+    pub fn max_action(&self, state: State) -> Option<(Action, QValue)> {
         fn action_rank(Action(i): Action) -> u8 {
             match i {
                 4 => 2,             // center

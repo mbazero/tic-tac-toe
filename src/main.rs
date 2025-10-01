@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Parser;
-use rand::{SeedableRng, rngs::SmallRng};
 use strum::{Display, EnumString};
 
 use tic_tac_toe::{
@@ -35,7 +34,7 @@ impl MoveStrategyArg {
             MoveStrategyArg::Random => Ok(RandomMoveStrategy::default().into()),
             MoveStrategyArg::QTable => {
                 let q_table = QTable::read_from_file(QTable::DEFAULT_FILE_PATH)?;
-                Ok(QTableMoveStrategy::new(q_table, SmallRng::from_os_rng()).into())
+                Ok(QTableMoveStrategy::new(q_table).into())
             }
             MoveStrategyArg::Suboptimal => Ok(SuboptimalMoveStrategy::default().into()),
         }
