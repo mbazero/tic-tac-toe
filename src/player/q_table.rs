@@ -62,7 +62,7 @@ impl MoveStrategy for QTableMoveStrategy {
     ) -> BoardIdx {
         let state = State(cur_player, board.as_bitset_board());
         self.q_table
-            .max_actions(state, &mut self.rng)
+            .max_action(state, &mut self.rng)
             .expect("no max action found")
             .0
             .0
@@ -142,24 +142,23 @@ pub struct QTable(Box<[QValue; StateAction::CARDINALITY]>);
 impl QTable {
     pub const DEFAULT_FILE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/artifacts/q_table");
 
-    pub fn max_actions(&self, state: State, rng: &mut impl RngCore) -> Option<(Action, QValue)> {
-        let qvals: SmallVec<[_; 9]> = state
+    pub fn max_action(&self, state: State, rng: &mut impl RngCore) -> Option<(Action, QValue)> {
+        fn action_rank(Action(i): Action) -> u8 {
+            match i {
+                4 => 2,             // center
+                0 | 2 | 6 | 8 => 1, // corners
+                _ => 0,
+            }
+        }
+
+        state
             .1
             .iter_available()
-            .map(|i| {
-                let action = Action(i);
-                (action, self[StateAction::new(state, action)])
+            .map(|i| (Action(i), self[StateAction::new(state, Action(i))]))
+            .max_by(|(a1, q1), (a2, q2)| {
+                q1.cmp(q2)
+                    .then_with(|| action_rank(*a1).cmp(&action_rank(*a2)))
             })
-            .collect();
-
-        let max_qval = qvals.iter().map(|(_, qval)| *qval).max()?;
-
-        let max_actions: SmallVec<[_; 9]> = qvals
-            .into_iter()
-            .filter(|(_, qval)| *qval == max_qval)
-            .collect();
-
-        max_actions.choose(rng).copied()
     }
 
     pub fn write_to_file(&self, path: impl AsRef<Path>) -> Result<()> {

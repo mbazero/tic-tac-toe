@@ -217,7 +217,7 @@ impl UpdateFunction {
         q_table: &mut QTable,
     ) {
         let max_next_q_value = match next_state {
-            Some(next_state) => match q_table.max_actions(next_state, &mut self.rng) {
+            Some(next_state) => match q_table.max_action(next_state, &mut self.rng) {
                 Some((_, q_value)) => q_value.0,
                 None => panic!(
                     "failed to find next action\nplayer: {:?}\nprev_board:\n{}\naction: {}\nnext_board:\n{}",
@@ -335,11 +335,6 @@ pub fn train(params: Params) -> (QTable, CombinedEvalStats) {
                 eval_stats.random.win_rate(),
                 eval_stats.suboptimal.win_rate(),
             );
-
-            if eval_stats.random.win_rate() >= 0.995 && eval_stats.suboptimal.win_rate() == 1.0 {
-                println!("Target performance achieved");
-                break;
-            }
         }
     }
 
@@ -446,16 +441,16 @@ mod tests {
         let params = Params {
             update: UpdateParams {
                 discount_factor: 1.0,
-                learning_rate: 0.1,
+                learning_rate: 0.05,
             },
             training: TrainingParams {
-                num_episodes: 10_000,
+                num_episodes: 50_000,
                 max_steps_per_episode: 9,
             },
             explore: ExploreParams::EpsilonDecay {
                 e_start: 1.0,
                 e_min: 0.05,
-                decay_frac: 0.8,
+                decay_frac: 1.0,
             },
             rng_seed: None,
         };
